@@ -16,7 +16,8 @@ import {
   AlertCircle,
   Share2,
   MessageSquare,
-  Wallet
+  Wallet,
+  FileText
 } from 'lucide-react';
 import { DayRecord, ExpenseRecord, TripRecord, WeeklySheet } from '../types';
 import { calculateDayTotals, calculateTripSubtotal, formatCurrency, formatDatePtBR } from '../utils/calculations';
@@ -194,10 +195,10 @@ export const DayEditor: React.FC<DayEditorProps> = ({
             <button
               onClick={() => setPrintModalDay({ day, idx: dayIdx })}
               className="inline-flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg shadow-2xs transition-colors cursor-pointer"
-              title="Gerar e Enviar Print do Caixa no WhatsApp"
+              title="Gerar e Baixar Comprovante em PDF ou Enviar no WhatsApp"
             >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>Print WhatsApp</span>
+              <FileText className="w-3.5 h-3.5 text-emerald-100" />
+              <span>Comprovante PDF / WhatsApp</span>
             </button>
 
             {dayIdx > 0 && (

@@ -8,11 +8,13 @@ import {
   Receipt, 
   MessageSquare,
   CheckCircle2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  FileText
 } from 'lucide-react';
 import { DayRecord, WeeklySheet } from '../types';
 import { calculateDayTotals, calculateTripSubtotal, formatCurrency, formatDatePtBR } from '../utils/calculations';
 import { generateTicketCanvas } from '../utils/ticketCanvas';
+import { downloadTicketPdf, getTicketPdfBlob } from '../utils/ticketPdf';
 
 interface CashPrintModalProps {
   isOpen: boolean;
@@ -30,6 +32,7 @@ export const CashPrintModal: React.FC<CashPrintModalProps> = ({
 }) => {
   const [copiedText, setCopiedText] = useState(false);
   const [copiedImage, setCopiedImage] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [imageGeneratedToast, setImageGeneratedToast] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'image' | 'text'>('image');
@@ -124,6 +127,20 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
     window.open(url, '_blank');
   };
 
+  const handleDownloadPdf = () => {
+    try {
+      setIsGeneratingPdf(true);
+      downloadTicketPdf(day, sheet);
+      setImageGeneratedToast('Comprovante em PDF baixado com sucesso!');
+      setTimeout(() => setImageGeneratedToast(null), 3500);
+    } catch (err) {
+      console.error('Erro ao gerar PDF:', err);
+      alert('Houve um erro ao baixar o PDF. Você pode baixar a imagem PNG ou copiar o texto para o WhatsApp.');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   const handleDownloadImage = () => {
     try {
       setIsGeneratingImage(true);
@@ -139,7 +156,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
       link.click();
       document.body.removeChild(link);
 
-      setImageGeneratedToast('Comprovante baixado com sucesso!');
+      setImageGeneratedToast('Comprovante em imagem PNG baixado com sucesso!');
       setTimeout(() => setImageGeneratedToast(null), 3500);
     } catch (err) {
       console.error('Erro ao baixar imagem:', err);
@@ -172,15 +189,15 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
             }, 3500);
             return;
           } catch {
-            handleDownloadImage();
+            handleDownloadPdf();
           }
         } else {
-          handleDownloadImage();
+          handleDownloadPdf();
         }
       }, 'image/png');
     } catch (err) {
       console.error('Erro ao copiar imagem:', err);
-      handleDownloadImage();
+      handleDownloadPdf();
     } finally {
       setIsGeneratingImage(false);
     }
@@ -189,57 +206,54 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
   const handleShareMobile = async () => {
     const text = generateWhatsAppMessage();
     try {
-      setIsGeneratingImage(true);
-      const canvas = generateTicketCanvas(day, sheet);
+      setIsGeneratingPdf(true);
+      const pdfBlob = getTicketPdfBlob(day, sheet);
+      const safeDate = day.date.replace(/[^a-zA-Z0-9]/g, '-');
+      const file = new File([pdfBlob], `Comprovante_${day.dayOfWeek}_${safeDate}.pdf`, { type: 'application/pdf' });
 
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          handleOpenWhatsApp();
+      // Se suportar compartilhamento de arquivos nativo do celular
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            title: `Comprovante de Fechamento - ${day.dayLabel}`,
+            text: text,
+            files: [file],
+          });
           return;
+        } catch (shareErr) {
+          console.log('Compartilhamento cancelado ou fallback', shareErr);
         }
+      }
 
-        const safeDate = day.date.replace(/[^a-zA-Z0-9]/g, '-');
-        const file = new File([blob], `Comprovante_${day.dayOfWeek}_${safeDate}.png`, { type: 'image/png' });
-
-        // Se suportar compartilhamento de arquivos nativo do celular
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          try {
-            await navigator.share({
-              title: `Comprovante de Fechamento - ${day.dayLabel}`,
-              text: text,
-              files: [file],
-            });
-            return;
-          } catch (shareErr) {
-            console.log('Compartilhamento cancelado ou fallback', shareErr);
-          }
+      // Se estiver no computador ou navegador desktop, copia a imagem e abre o WhatsApp
+      if (navigator.clipboard && window.ClipboardItem) {
+        try {
+          const canvas = generateTicketCanvas(day, sheet);
+          canvas.toBlob(async (imgBlob) => {
+            if (imgBlob) {
+              await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': imgBlob }),
+              ]);
+            }
+          });
+          setImageGeneratedToast('Comprovante copiado! Abrindo WhatsApp...');
+          setTimeout(() => {
+            handleOpenWhatsApp();
+          }, 800);
+          return;
+        } catch {
+          // Se falhar a cópia, baixa o PDF e abre
         }
+      }
 
-        // Se estiver no computador ou navegador desktop, copia a imagem e abre o WhatsApp
-        if (navigator.clipboard && window.ClipboardItem) {
-          try {
-            await navigator.clipboard.write([
-              new ClipboardItem({ 'image/png': blob }),
-            ]);
-            setImageGeneratedToast('Imagem copiada! Abrindo WhatsApp...');
-            setTimeout(() => {
-              handleOpenWhatsApp();
-            }, 800);
-            return;
-          } catch {
-            // Se falhar a cópia, baixa e abre
-          }
-        }
-
-        // Fallback garantido: baixa a imagem e abre WhatsApp
-        handleDownloadImage();
-        setTimeout(() => handleOpenWhatsApp(), 600);
-      }, 'image/png');
+      // Fallback garantido: baixa o PDF e abre WhatsApp
+      handleDownloadPdf();
+      setTimeout(() => handleOpenWhatsApp(), 600);
     } catch (err) {
       console.error('Erro ao compartilhar:', err);
       handleOpenWhatsApp();
     } finally {
-      setIsGeneratingImage(false);
+      setIsGeneratingPdf(false);
     }
   };
 
@@ -275,23 +289,36 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
         <div className="bg-emerald-50/80 p-3 sm:p-4 border-b border-emerald-100 flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
             
+            {/* PRIMARY BUTTON: Download PDF */}
+            <button
+              onClick={handleDownloadPdf}
+              disabled={isGeneratingPdf}
+              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-red-700 hover:bg-red-800 active:bg-red-900 text-white font-black text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-sm transition-all cursor-pointer min-h-[44px] disabled:opacity-50"
+              title="Baixar comprovante formatado em documento PDF (tamanho A4 pronto para imprimir e compartilhar)"
+            >
+              <FileText className="w-4 h-4 text-red-200" />
+              <span>{isGeneratingPdf ? 'Gerando PDF...' : 'Baixar em PDF'}</span>
+            </button>
+
             {/* Direct WhatsApp Share */}
             <button
               onClick={handleShareMobile}
-              disabled={isGeneratingImage}
+              disabled={isGeneratingPdf || isGeneratingImage}
               className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
+              title="Compartilhar comprovante no WhatsApp"
             >
               <Share2 className="w-4 h-4" />
-              <span>Enviar Imagem no WhatsApp</span>
+              <span>Enviar no WhatsApp</span>
             </button>
 
-            {/* Download Print Image */}
+            {/* Download Print Image (PNG) */}
             <button
               onClick={handleDownloadImage}
               disabled={isGeneratingImage}
-              className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px] disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold text-xs px-3 py-2.5 rounded-xl shadow-2xs transition-colors cursor-pointer min-h-[44px] disabled:opacity-50"
+              title="Baixar também no formato de imagem PNG"
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-4 h-4 text-slate-500" />
               <span>{isGeneratingImage ? 'Processando...' : 'Baixar Imagem (PNG)'}</span>
             </button>
 
@@ -437,18 +464,29 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
                 </div>
               )}
 
-              {/* Quick download & share floating bar under image */}
-              <div className="w-full mt-3 flex items-center justify-center gap-3">
+              {/* Quick download & share floating bar under preview */}
+              <div className="w-full mt-3.5 flex items-center justify-center gap-2.5 flex-wrap">
+                <button
+                  onClick={handleDownloadPdf}
+                  disabled={isGeneratingPdf}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-red-700 hover:bg-red-800 active:bg-red-900 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
+                  title="Baixar comprovante formatado em PDF"
+                >
+                  <FileText className="w-4 h-4 text-red-200" />
+                  <span>{isGeneratingPdf ? 'Gerando PDF...' : 'Baixar Comprovante em PDF'}</span>
+                </button>
                 <button
                   onClick={handleDownloadImage}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isGeneratingImage}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs cursor-pointer disabled:opacity-50"
+                  title="Baixar em formato imagem PNG"
                 >
                   <Download className="w-4 h-4" />
                   <span>Baixar Imagem PNG</span>
                 </button>
                 <button
                   onClick={handleShareMobile}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
                 >
                   <Share2 className="w-4 h-4" />
                   <span>Enviar no WhatsApp</span>
@@ -462,7 +500,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
         {/* Modal Footer */}
         <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
           <span className="hidden sm:inline">
-            A imagem mostra todas as viagens, despesas e a <strong>Sobra Real em Dinheiro</strong> calculada.
+            Clique em <strong>Baixar em PDF</strong> para salvar o documento oficial ou <strong>Enviar no WhatsApp</strong> para compartilhar.
           </span>
           <button
             onClick={onClose}
