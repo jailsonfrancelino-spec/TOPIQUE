@@ -1,0 +1,6 @@
+{
+  "name": "Fluxo de Caixa - Transporte",
+  "description": "Sistema de controle diário e semanal de fluxo de caixa para empresas de transporte de passageiros e encomendas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
