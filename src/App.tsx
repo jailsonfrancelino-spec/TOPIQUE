@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { WeeklySheet, DayRecord } from './types';
 import { 
   loadAllSheets, 
@@ -18,12 +18,22 @@ import {
   formatDateIso,
   updateSheetDatesForWeek
 } from './utils/storage';
+import {
+  testSupabaseConnection,
+  fetchSheetsFromSupabase,
+  saveSheetToSupabase,
+  deleteSheetFromSupabase,
+  subscribeToWeeklySheets,
+  SupabaseStatus,
+} from './utils/supabase';
 import { Header } from './components/Header';
 import { DayEditor } from './components/DayEditor';
 import { WeeklySummary } from './components/WeeklySummary';
 import { PrintableSheet } from './components/PrintableSheet';
 import { HistoryView } from './components/HistoryView';
 import { NewWeekModal } from './components/NewWeekModal';
+import { SupabaseModal } from './components/SupabaseModal';
+import { Database, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [sheets, setSheets] = useState<WeeklySheet[]>(() => loadAllSheets());
@@ -40,10 +50,22 @@ export default function App() {
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(0);
   const [isNewWeekModalOpen, setIsNewWeekModalOpen] = useState(false);
 
+  // Supabase state
+  const [supabaseStatus, setSupabaseStatus] = useState<SupabaseStatus>({
+    connected: true,
+    tableExists: false,
+    lastChecked: '',
+  });
+  const [syncState, setSyncState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const saveDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isRemoteSyncRef = useRef<boolean>(false);
+
   // Sync active sheet
   const activeSheet = sheets.find((s) => s.id === activeId) || sheets[0];
 
-  // Auto-save whenever sheets change
+  // Auto-save locally whenever sheets change
   useEffect(() => {
     if (sheets.length > 0) {
       saveAllSheets(sheets);
@@ -56,6 +78,141 @@ export default function App() {
       setActiveSheetId(activeId);
     }
   }, [activeId]);
+
+  // Check Supabase connection and load cloud data
+  const refreshSupabaseStatus = async () => {
+    const status = await testSupabaseConnection();
+    setSupabaseStatus(status);
+    return status;
+  };
+
+  useEffect(() => {
+    let unsubscribeRealtime: (() => void) | null = null;
+
+    const initSupabase = async () => {
+      const status = await refreshSupabaseStatus();
+
+      if (status.tableExists) {
+        // Fetch sheets from Supabase
+        const cloudSheets = await fetchSheetsFromSupabase();
+        if (cloudSheets && cloudSheets.length > 0) {
+          isRemoteSyncRef.current = true;
+          setSheets(cloudSheets);
+          setActiveId((prevId) => {
+            if (cloudSheets.some((s) => s.id === prevId)) return prevId;
+            return cloudSheets[0].id;
+          });
+          setSyncState('saved');
+          setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+          setTimeout(() => {
+            isRemoteSyncRef.current = false;
+          }, 300);
+        } else if (cloudSheets && cloudSheets.length === 0) {
+          // Table exists in Supabase but is empty: push initial sheets
+          const currentLocal = loadAllSheets();
+          if (currentLocal.length > 0) {
+            for (const s of currentLocal) {
+              await saveSheetToSupabase(s);
+            }
+            setSyncState('saved');
+            setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+          }
+        }
+
+        // Subscribe to Realtime changes across any device or browser tab
+        unsubscribeRealtime = subscribeToWeeklySheets(
+          (remoteSheet) => {
+            isRemoteSyncRef.current = true;
+            setSheets((prev) => {
+              const idx = prev.findIndex((s) => s.id === remoteSheet.id);
+              if (idx >= 0) {
+                const copy = [...prev];
+                copy[idx] = remoteSheet;
+                return copy;
+              } else {
+                return [remoteSheet, ...prev];
+              }
+            });
+            setSyncState('saved');
+            setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+            setTimeout(() => {
+              isRemoteSyncRef.current = false;
+            }, 300);
+          },
+          (deletedId) => {
+            isRemoteSyncRef.current = true;
+            setSheets((prev) => prev.filter((s) => s.id !== deletedId));
+            setTimeout(() => {
+              isRemoteSyncRef.current = false;
+            }, 300);
+          }
+        );
+      }
+    };
+
+    initSupabase();
+
+    return () => {
+      if (unsubscribeRealtime) {
+        unsubscribeRealtime();
+      }
+    };
+  }, []);
+
+  // Debounced auto-save to Supabase on table inputs change
+  useEffect(() => {
+    if (!activeSheet || isRemoteSyncRef.current) return;
+
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current);
+    }
+
+    setSyncState('saving');
+
+    saveDebounceTimerRef.current = setTimeout(async () => {
+      const ok = await saveSheetToSupabase(activeSheet);
+      if (ok) {
+        setSyncState('saved');
+        setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+        setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
+      } else {
+        setSyncState('error');
+      }
+    }, 600);
+
+    return () => {
+      if (saveDebounceTimerRef.current) {
+        clearTimeout(saveDebounceTimerRef.current);
+      }
+    };
+  }, [activeSheet]);
+
+  const handleSyncAllToCloud = async () => {
+    setSyncState('saving');
+    for (const s of sheets) {
+      await saveSheetToSupabase(s);
+    }
+    setSyncState('saved');
+    setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+    setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
+  };
+
+  const handlePullFromCloud = async () => {
+    setSyncState('saving');
+    const cloudSheets = await fetchSheetsFromSupabase();
+    if (cloudSheets && cloudSheets.length > 0) {
+      isRemoteSyncRef.current = true;
+      setSheets(cloudSheets);
+      setActiveId(cloudSheets[0].id);
+      setSyncState('saved');
+      setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+      setTimeout(() => {
+        isRemoteSyncRef.current = false;
+      }, 300);
+    } else {
+      setSyncState('idle');
+    }
+  };
 
   const handleSelectSheet = (id: string) => {
     setActiveId(id);
@@ -136,14 +293,17 @@ export default function App() {
     setSheets((prev) => [newSheet, ...prev]);
     setActiveId(newSheet.id);
     setActiveTab('daily');
+    saveSheetToSupabase(newSheet);
   };
 
   const handleDeleteSheet = (sheetId: string) => {
+    deleteSheetFromSupabase(sheetId);
     setSheets((prev) => {
       const remaining = prev.filter((s) => s.id !== sheetId);
       if (remaining.length === 0) {
         const fresh = createNewWeeklySheet();
         setActiveId(fresh.id);
+        saveSheetToSupabase(fresh);
         return [fresh];
       }
       if (activeId === sheetId) {
@@ -230,7 +390,29 @@ export default function App() {
           onImportJson={handleImportJson}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
+          supabaseStatus={supabaseStatus}
+          syncState={syncState}
+          lastSavedTime={lastSavedTime}
+          onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
         />
+      )}
+
+      {/* Supabase Setup Notification Banner if table is not yet created */}
+      {!supabaseStatus.tableExists && (
+        <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 px-4 py-2 text-xs font-semibold border-b border-amber-600 flex items-center justify-between gap-3 shadow-xs print:hidden">
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-slate-950 shrink-0" />
+            <span>
+              <strong>Banco Supabase Conectado:</strong> Crie a tabela <code className="bg-amber-400 px-1 py-0.5 rounded text-[11px] font-mono">weekly_sheets</code> no Supabase para habilitar salvamento na nuvem e sincronização em tempo real.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsSupabaseModalOpen(true)}
+            className="bg-slate-950 hover:bg-black text-white font-bold px-3 py-1 rounded-lg text-xs transition-colors cursor-pointer shrink-0 shadow-2xs"
+          >
+            Ver SQL & Instruções
+          </button>
+        </div>
       )}
 
       {/* Main Content Area */}
@@ -311,6 +493,17 @@ export default function App() {
           defaultRoute={activeSheet.companyRoute}
         />
       )}
+
+      {/* Supabase Management & SQL Guide Modal */}
+      <SupabaseModal
+        isOpen={isSupabaseModalOpen}
+        onClose={() => setIsSupabaseModalOpen(false)}
+        status={supabaseStatus}
+        syncState={syncState}
+        onRefreshStatus={refreshSupabaseStatus}
+        onSyncAllToCloud={handleSyncAllToCloud}
+        onPullFromCloud={handlePullFromCloud}
+      />
 
     </div>
   );

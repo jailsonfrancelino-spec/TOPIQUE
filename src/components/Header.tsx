@@ -11,10 +11,13 @@ import {
   History, 
   PlusCircle, 
   Printer, 
-  RotateCcw
+  RotateCcw,
+  Database,
+  Radio
 } from 'lucide-react';
 import { WeeklySheet } from '../types';
 import { formatDatePtBR } from '../utils/calculations';
+import { SupabaseStatus } from '../utils/supabase';
 
 interface HeaderProps {
   sheet: WeeklySheet;
@@ -31,6 +34,10 @@ interface HeaderProps {
   onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
   activeTab: 'daily' | 'weekly' | 'print' | 'history';
   setActiveTab: (tab: 'daily' | 'weekly' | 'print' | 'history') => void;
+  supabaseStatus: SupabaseStatus;
+  syncState: 'idle' | 'saving' | 'saved' | 'error';
+  lastSavedTime: string | null;
+  onOpenSupabaseModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -46,6 +53,10 @@ export const Header: React.FC<HeaderProps> = ({
   onExportCsv,
   activeTab,
   setActiveTab,
+  supabaseStatus,
+  syncState,
+  lastSavedTime,
+  onOpenSupabaseModal,
 }) => {
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [routeInput, setRouteInput] = useState(sheet.companyRoute);
@@ -75,9 +86,36 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
                   Fluxo de Caixa Operacional
                 </span>
-                <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium">
-                  <CheckCircle2 className="w-3 h-3" /> Auto-salvo
-                </span>
+                
+                {/* Supabase Realtime Status Button */}
+                <button
+                  onClick={onOpenSupabaseModal}
+                  className={`text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1.5 font-bold transition-all cursor-pointer border shadow-2xs ${
+                    syncState === 'saving'
+                      ? 'bg-blue-100 text-blue-800 border-blue-300 animate-pulse'
+                      : supabaseStatus.tableExists
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                      : 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                  }`}
+                  title="Conexão com banco de dados Supabase em tempo real. Clique para gerenciar."
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>
+                    {syncState === 'saving' ? (
+                      'Salvando no Supabase...'
+                    ) : supabaseStatus.tableExists ? (
+                      'Supabase: Tempo Real Ativo'
+                    ) : (
+                      'Supabase: Criar Tabela'
+                    )}
+                  </span>
+                  {supabaseStatus.tableExists && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  )}
+                  {lastSavedTime && syncState === 'saved' && (
+                    <span className="text-[10px] font-normal opacity-80">({lastSavedTime})</span>
+                  )}
+                </button>
               </div>
 
               {!isEditingHeader ? (
