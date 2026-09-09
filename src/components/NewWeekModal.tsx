@@ -102,6 +102,9 @@ export const NewWeekModal: React.FC<NewWeekModalProps> = ({
               <div className="text-slate-700 font-medium pl-5.5">
                 🏁 <strong>Domingo:</strong> {formatDatePtBR(sundayIso)}
               </div>
+              <div className="text-emerald-700 font-bold pl-5.5 pt-1">
+                ✓ O caixa iniciará 100% zerado para alimentação diária.
+              </div>
             </div>
           </div>
 

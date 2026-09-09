@@ -1,9 +1,85 @@
-import { DayRecord, ExpenseRecord, TripRecord, WeeklySheet } from '../types';
+import { DayRecord, ExpenseRecord, TripRecord, WeeklySheet, Driver, AuthUser } from '../types';
 import { calculateDayTotals, calculateTripSubtotal, calculateWeeklyTotals, formatCurrencySimple } from './calculations';
 
 const STORAGE_KEY = 'transport_cashflow_sheets_v1';
 const ACTIVE_SHEET_ID_KEY = 'transport_cashflow_active_id_v1';
+const DRIVERS_STORAGE_KEY = 'transport_cashflow_drivers_v1';
+const AUTH_SESSION_KEY = 'transport_cashflow_auth_session_v1';
 export const DEFAULT_ROUTE = 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON';
+
+export const INITIAL_DRIVERS: Driver[] = [
+  {
+    id: 'driver-jailson-admin',
+    name: 'Jailson Francelino',
+    username: 'jailson12',
+    password: 'password201212',
+    phone: '(88) 99912-3456',
+    vehiclePlate: 'BRA-2E19',
+    vehicleModel: 'Van Sprinter / Micro Linha',
+    status: 'ativo',
+    notes: 'Motorista Principal e Administrador da Rota Tianguá x Viçosa',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+];
+
+export function getSavedAuthSession(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Erro ao ler sessão salva:', err);
+    return null;
+  }
+}
+
+export function saveAuthSession(user: AuthUser): void {
+  try {
+    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(user));
+  } catch (err) {
+    console.error('Erro ao salvar sessão local:', err);
+  }
+}
+
+export function clearAuthSession(): void {
+  try {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+  } catch (err) {
+    console.error('Erro ao limpar sessão:', err);
+  }
+}
+
+export function loadAllDrivers(): Driver[] {
+  try {
+    const raw = localStorage.getItem(DRIVERS_STORAGE_KEY);
+    if (!raw) {
+      saveAllDrivers(INITIAL_DRIVERS);
+      return INITIAL_DRIVERS;
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Garantir compatibilidade com drivers antigos sem username/password
+      return parsed.map((d: any) => ({
+        ...d,
+        username: d.username || d.name?.toLowerCase().replace(/\s+/g, '') || 'motorista',
+        password: d.password || '123456',
+      }));
+    }
+    return INITIAL_DRIVERS;
+  } catch (err) {
+    console.error('Erro ao carregar motoristas locais:', err);
+    return INITIAL_DRIVERS;
+  }
+}
+
+export function saveAllDrivers(drivers: Driver[]): void {
+  try {
+    localStorage.setItem(DRIVERS_STORAGE_KEY, JSON.stringify(drivers));
+  } catch (err) {
+    console.error('Erro ao salvar motoristas no localStorage:', err);
+  }
+}
 
 /**
  * Retorna sempre a SEGUNDA-FEIRA correspondente à data fornecida,
@@ -167,102 +243,51 @@ export function updateSheetDatesForWeek(sheet: WeeklySheet, anyDateInWeek: strin
 }
 
 export function createSampleWeeklySheet(): WeeklySheet {
-  const sheet = createNewWeeklySheet('2026-09-07', undefined, DEFAULT_ROUTE);
-  sheet.id = 'sheet-sample-tiangua-vicosa';
-
-  // Sample data realistic for Tianguá x Viçosa (Passageiros e Encomendas)
-  // Segunda
-  sheet.days[0].trips[0] = { ...sheet.days[0].trips[0], ida: 240, volta: 260, encom: 80, pix: 180 };
-  sheet.days[0].trips[1] = { ...sheet.days[0].trips[1], ida: 190, volta: 220, encom: 50, pix: 120 };
-  sheet.days[0].trips[2] = { ...sheet.days[0].trips[2], ida: 210, volta: 180, encom: 90, pix: 140 };
-  sheet.days[0].trips[3] = { ...sheet.days[0].trips[3], ida: 280, volta: 310, encom: 110, pix: 220 };
-  sheet.days[0].expenses[0].value = 130; // Motorista
-  sheet.days[0].expenses[1].value = 80;  // Cobrador
-  sheet.days[0].expenses[2].value = 240; // Combustível
-  sheet.days[0].expenses[3].value = 35;  // Outras (Pedágio/Lanche)
-  sheet.days[0].trips[3] = { ...sheet.days[0].trips[3], ida: 280, volta: 310, encom: 110, pix: 220 };
-  sheet.days[0].expenses[0].value = 130; // Motorista
-  sheet.days[0].expenses[1].value = 80;  // Cobrador
-  sheet.days[0].expenses[2].value = 240; // Combustível
-  sheet.days[0].expenses[3].value = 35;  // Outras (Pedágio/Lanche)
-
-  // Terça
-  sheet.days[1].trips[0] = { ...sheet.days[1].trips[0], ida: 210, volta: 230, encom: 60, pix: 150 };
-  sheet.days[1].trips[1] = { ...sheet.days[1].trips[1], ida: 180, volta: 190, encom: 40, pix: 90 };
-  sheet.days[1].trips[2] = { ...sheet.days[1].trips[2], ida: 200, volta: 220, encom: 75, pix: 130 };
-  sheet.days[1].trips[3] = { ...sheet.days[1].trips[3], ida: 260, volta: 270, encom: 85, pix: 190 };
-  sheet.days[1].expenses[0].value = 130;
-  sheet.days[1].expenses[1].value = 80;
-  sheet.days[1].expenses[2].value = 230;
-  sheet.days[1].expenses[3].value = 20;
-
-  // Quarta
-  sheet.days[2].trips[0] = { ...sheet.days[2].trips[0], ida: 250, volta: 280, encom: 95, pix: 200 };
-  sheet.days[2].trips[1] = { ...sheet.days[2].trips[1], ida: 220, volta: 210, encom: 60, pix: 140 };
-  sheet.days[2].trips[2] = { ...sheet.days[2].trips[2], ida: 230, volta: 240, encom: 70, pix: 160 };
-  sheet.days[2].trips[3] = { ...sheet.days[2].trips[3], ida: 300, volta: 320, encom: 120, pix: 260 };
-  sheet.days[2].expenses[0].value = 130;
-  sheet.days[2].expenses[1].value = 80;
-  sheet.days[2].expenses[2].value = 250;
-  sheet.days[2].expenses[3].value = 40;
-
-  // Quinta
-  sheet.days[3].trips[0] = { ...sheet.days[3].trips[0], ida: 200, volta: 220, encom: 50, pix: 130 };
-  sheet.days[3].trips[1] = { ...sheet.days[3].trips[1], ida: 190, volta: 180, encom: 45, pix: 110 };
-  sheet.days[3].trips[2] = { ...sheet.days[3].trips[2], ida: 210, volta: 230, encom: 80, pix: 150 };
-  sheet.days[3].trips[3] = { ...sheet.days[3].trips[3], ida: 270, volta: 290, encom: 90, pix: 210 };
-  sheet.days[3].expenses[0].value = 130;
-  sheet.days[3].expenses[1].value = 80;
-  sheet.days[3].expenses[2].value = 220;
-  sheet.days[3].expenses[3].value = 25;
-
-  // Sexta (Mais movimento)
-  sheet.days[4].trips[0] = { ...sheet.days[4].trips[0], ida: 310, volta: 340, encom: 130, pix: 280 };
-  sheet.days[4].trips[1] = { ...sheet.days[4].trips[1], ida: 280, volta: 300, encom: 100, pix: 230 };
-  sheet.days[4].trips[2] = { ...sheet.days[4].trips[2], ida: 320, volta: 350, encom: 115, pix: 290 };
-  sheet.days[4].trips[3] = { ...sheet.days[4].trips[3], ida: 380, volta: 410, encom: 150, pix: 350 };
-  sheet.days[4].expenses[0].value = 150;
-  sheet.days[4].expenses[1].value = 90;
-  sheet.days[4].expenses[2].value = 280;
-  sheet.days[4].expenses[3].value = 50;
-
-  // Sábado
-  sheet.days[5].trips[0] = { ...sheet.days[5].trips[0], ida: 290, volta: 260, encom: 85, pix: 210 };
-  sheet.days[5].trips[1] = { ...sheet.days[5].trips[1], ida: 250, volta: 240, encom: 70, pix: 180 };
-  sheet.days[5].trips[2] = { ...sheet.days[5].trips[2], ida: 220, volta: 210, encom: 60, pix: 140 };
-  sheet.days[5].trips[3] = { ...sheet.days[5].trips[3], ida: 240, volta: 250, encom: 65, pix: 170 };
-  sheet.days[5].expenses[0].value = 130;
-  sheet.days[5].expenses[1].value = 80;
-  sheet.days[5].expenses[2].value = 230;
-  sheet.days[5].expenses[3].value = 30;
-
-  // Domingo (Caso Haja Viagem - viagem especial)
-  sheet.days[6].trips[0] = { ...sheet.days[6].trips[0], ida: 350, volta: 380, encom: 120, pix: 320 };
-  sheet.days[6].expenses[0].value = 180; // Despesas Dom.
-
+  // Caixa inicia 100% ZERADO para o motorista/administrador ir alimentando
+  const sheet = createNewWeeklySheet(formatDateIso(getMonday()), undefined, DEFAULT_ROUTE);
+  sheet.id = 'sheet-zerada-tiangua-vicosa';
   return sheet;
+}
+
+export function zeroOutSheet(sheet: WeeklySheet): WeeklySheet {
+  return {
+    ...sheet,
+    days: sheet.days.map((day) => ({
+      ...day,
+      trips: day.trips.map((t) => ({ ...t, ida: 0, volta: 0, encom: 0, pix: 0 })),
+      expenses: day.expenses.map((e) => ({ ...e, value: 0, receiptImage: undefined, receiptName: undefined })),
+    })),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function loadAllSheets(): WeeklySheet[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      const sample = createSampleWeeklySheet();
-      saveAllSheets([sample]);
-      setActiveSheetId(sample.id);
-      return [sample];
+      const clean = createSampleWeeklySheet();
+      saveAllSheets([clean]);
+      setActiveSheetId(clean.id);
+      return [clean];
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      // Se for a planilha de exemplo antiga com valores fictícios pré-preenchidos, zera automaticamente
+      const updated = parsed.map((s: WeeklySheet) => {
+        if (s.id === 'sheet-sample-tiangua-vicosa') {
+          return zeroOutSheet(s);
+        }
+        return s;
+      });
+      return updated;
     }
   } catch (err) {
     console.error('Erro ao ler do localStorage:', err);
   }
-  const sample = createSampleWeeklySheet();
-  saveAllSheets([sample]);
-  setActiveSheetId(sample.id);
-  return [sample];
+  const clean = createSampleWeeklySheet();
+  saveAllSheets([clean]);
+  setActiveSheetId(clean.id);
+  return [clean];
 }
 
 export function saveAllSheets(sheets: WeeklySheet[]): void {

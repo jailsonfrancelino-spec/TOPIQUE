@@ -407,13 +407,25 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
                     className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
                     title="Clique para editar este dia"
                   >
-                    <td className="py-3.5 px-4 font-semibold text-slate-900 flex items-center justify-between">
-                      <span className="group-hover:text-blue-700 transition-colors">
-                        {day.dayLabel}
-                      </span>
-                      <span className="text-[11px] font-normal text-slate-400">
-                        {formatDatePtBR(day.date)}
-                      </span>
+                    <td className="py-3 px-4 font-semibold text-slate-900">
+                      <div className="flex items-center justify-between">
+                        <span className="group-hover:text-blue-700 transition-colors">
+                          {day.dayLabel}
+                        </span>
+                        <span className="text-[11px] font-normal text-slate-400">
+                          {formatDatePtBR(day.date)}
+                        </span>
+                      </div>
+                      {sheet.days[idx]?.driverName && (
+                        <div className="text-[10px] text-blue-700 font-semibold flex items-center gap-1 mt-0.5">
+                          <span>👤 {sheet.days[idx]?.driverName}</span>
+                          {sheet.days[idx]?.vehiclePlate && (
+                            <span className="font-mono bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded text-[9px] border border-slate-200">
+                              {sheet.days[idx]?.vehiclePlate}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3.5 px-2.5 text-right font-mono font-medium text-slate-800">
                       {formatCurrency(day.arrecadacao)}

@@ -1,3 +1,26 @@
+export interface Driver {
+  id: string;
+  name: string;
+  username: string; // Login para o motorista poder entrar no sistema
+  password: string; // Senha para o motorista poder entrar no sistema
+  phone?: string;
+  vehiclePlate?: string;
+  vehicleModel?: string;
+  status: 'ativo' | 'inativo';
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type UserRole = 'admin' | 'driver';
+
+export interface AuthUser {
+  role: UserRole;
+  username: string;
+  displayName: string;
+  driverId?: string;
+}
+
 export interface TripRecord {
   id: string;
   tripName: string; // e.g. "1ª Viagem", "2ª Viagem", etc.
@@ -5,6 +28,8 @@ export interface TripRecord {
   volta: number;
   encom: number; // Encomendas
   pix: number;
+  driverId?: string;
+  driverName?: string;
 }
 
 export interface ExpenseRecord {
@@ -13,6 +38,8 @@ export interface ExpenseRecord {
   label: string;
   value: number;
   description?: string;
+  receiptImage?: string; // Imagem/Foto do comprovante (Base64)
+  receiptName?: string;  // Nome do arquivo ou data/hora do envio
 }
 
 export type DayOfWeek = 'segunda' | 'terca' | 'quarta' | 'quinta' | 'sexta' | 'sabado' | 'domingo';
@@ -25,17 +52,22 @@ export interface DayRecord {
   trips: TripRecord[];
   expenses: ExpenseRecord[];
   notes?: string;
+  driverId?: string;
+  driverName?: string;
+  vehiclePlate?: string;
 }
 
 export interface WeeklySheet {
   id: string;
   companyRoute: string; // e.g. "TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON"
-  vehiclePlate?: string; // Optional (not needed per user request)
+  vehiclePlate?: string;
   vehicleModel?: string;
   weekNumber?: number;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD
   days: DayRecord[];
+  driverId?: string;
+  driverName?: string;
   createdAt: string;
   updatedAt: string;
 }

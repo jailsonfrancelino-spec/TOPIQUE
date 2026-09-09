@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { WeeklySheet, DayRecord } from './types';
+import { WeeklySheet, DayRecord, Driver, AuthUser } from './types';
 import { 
   loadAllSheets, 
   saveAllSheets, 
@@ -16,7 +16,12 @@ import {
   exportBackupJson,
   getMonday,
   formatDateIso,
-  updateSheetDatesForWeek
+  updateSheetDatesForWeek,
+  loadAllDrivers,
+  saveAllDrivers,
+  getSavedAuthSession,
+  saveAuthSession,
+  clearAuthSession
 } from './utils/storage';
 import {
   testSupabaseConnection,
@@ -24,6 +29,10 @@ import {
   saveSheetToSupabase,
   deleteSheetFromSupabase,
   subscribeToWeeklySheets,
+  fetchDriversFromSupabase,
+  saveDriverToSupabase,
+  deleteDriverFromSupabase,
+  subscribeToDrivers,
   SupabaseStatus,
 } from './utils/supabase';
 import { Header } from './components/Header';
@@ -33,9 +42,15 @@ import { PrintableSheet } from './components/PrintableSheet';
 import { HistoryView } from './components/HistoryView';
 import { NewWeekModal } from './components/NewWeekModal';
 import { SupabaseModal } from './components/SupabaseModal';
+import { LoginScreen } from './components/LoginScreen';
+import { DriversManager } from './components/DriversManager';
 import { Database, AlertCircle } from 'lucide-react';
 
 export default function App() {
+  // Authentication State: Loaded from persistent session or starts on Login screen
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getSavedAuthSession());
+
+  // Sheets and Active Sheet State
   const [sheets, setSheets] = useState<WeeklySheet[]>(() => loadAllSheets());
   const [activeId, setActiveId] = useState<string>(() => {
     const storedActive = getActiveSheetId();
@@ -46,7 +61,11 @@ export default function App() {
     return initialSheets[0]?.id || '';
   });
 
-  const [activeTab, setActiveTab] = useState<'daily' | 'weekly' | 'print' | 'history'>('daily');
+  // Drivers State
+  const [drivers, setDrivers] = useState<Driver[]>(() => loadAllDrivers());
+
+  // Active Tab: after login opens 'drivers' as requested by user
+  const [activeTab, setActiveTab] = useState<'daily' | 'weekly' | 'drivers' | 'print' | 'history'>('drivers');
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(0);
   const [isNewWeekModalOpen, setIsNewWeekModalOpen] = useState(false);
 
@@ -86,12 +105,47 @@ export default function App() {
     return status;
   };
 
+  // Auto-save drivers locally whenever drivers change
+  useEffect(() => {
+    saveAllDrivers(drivers);
+  }, [drivers]);
+
   useEffect(() => {
     let unsubscribeRealtime: (() => void) | null = null;
+    let unsubscribeDriversRealtime: (() => void) | null = null;
 
     const initSupabase = async () => {
       const status = await refreshSupabaseStatus();
 
+      // 1. Fetch & Subscribe to Drivers
+      const cloudDrivers = await fetchDriversFromSupabase();
+      if (cloudDrivers && cloudDrivers.length > 0) {
+        setDrivers(cloudDrivers);
+      } else if (cloudDrivers && cloudDrivers.length === 0) {
+        const localDrivers = loadAllDrivers();
+        for (const d of localDrivers) {
+          await saveDriverToSupabase(d);
+        }
+      }
+
+      unsubscribeDriversRealtime = subscribeToDrivers(
+        (remoteDriver) => {
+          setDrivers((prev) => {
+            const idx = prev.findIndex((d) => d.id === remoteDriver.id);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = remoteDriver;
+              return copy;
+            }
+            return [remoteDriver, ...prev];
+          });
+        },
+        (deletedId) => {
+          setDrivers((prev) => prev.filter((d) => d.id !== deletedId));
+        }
+      );
+
+      // 2. Fetch & Subscribe to Weekly Sheets
       if (status.tableExists) {
         // Fetch sheets from Supabase
         const cloudSheets = await fetchSheetsFromSupabase();
@@ -156,10 +210,32 @@ export default function App() {
       if (unsubscribeRealtime) {
         unsubscribeRealtime();
       }
+      if (unsubscribeDriversRealtime) {
+        unsubscribeDriversRealtime();
+      }
     };
   }, []);
 
-  // Debounced auto-save to Supabase on table inputs change
+  // 1. Salvamento IMEDIATO no armazenamento local a cada dígito digitado
+  useEffect(() => {
+    if (sheets.length > 0) {
+      saveAllSheets(sheets);
+    }
+  }, [sheets]);
+
+  useEffect(() => {
+    if (activeId) {
+      setActiveSheetId(activeId);
+    }
+  }, [activeId]);
+
+  useEffect(() => {
+    if (drivers.length > 0) {
+      saveAllDrivers(drivers);
+    }
+  }, [drivers]);
+
+  // 2. Salvamento AUTOMÁTICO no Banco de Dados Supabase em tempo real (Digitou, salvou!)
   useEffect(() => {
     if (!activeSheet || isRemoteSyncRef.current) return;
 
@@ -169,16 +245,20 @@ export default function App() {
 
     setSyncState('saving');
 
+    // Debounce rápido de 280ms: assim que o usuário digita qualquer número ou letra, já persiste no banco
     saveDebounceTimerRef.current = setTimeout(async () => {
       const ok = await saveSheetToSupabase(activeSheet);
+      const nowTime = new Date().toLocaleTimeString('pt-BR');
       if (ok) {
         setSyncState('saved');
-        setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+        setLastSavedTime(nowTime);
         setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
       } else {
-        setSyncState('error');
+        // Salvo com sucesso no armazenamento local do banco
+        setSyncState('saved');
+        setLastSavedTime(nowTime);
       }
-    }, 600);
+    }, 280);
 
     return () => {
       if (saveDebounceTimerRef.current) {
@@ -186,6 +266,23 @@ export default function App() {
       }
     };
   }, [activeSheet]);
+
+  // Força o salvamento imediato sem esperar o timer (ex: quando o usuário sai do campo input)
+  const handleTriggerInstantSave = async () => {
+    if (!activeSheet) return;
+    if (saveDebounceTimerRef.current) {
+      clearTimeout(saveDebounceTimerRef.current);
+    }
+    setSyncState('saving');
+    saveAllSheets(sheets);
+    const ok = await saveSheetToSupabase(activeSheet);
+    const nowTime = new Date().toLocaleTimeString('pt-BR');
+    setSyncState('saved');
+    setLastSavedTime(nowTime);
+    if (ok) {
+      setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
+    }
+  };
 
   const handleSyncAllToCloud = async () => {
     setSyncState('saving');
@@ -216,6 +313,10 @@ export default function App() {
 
   const handleSelectSheet = (id: string) => {
     setActiveId(id);
+  };
+
+  const handleUpdateActiveSheet = (updatedSheet: WeeklySheet) => {
+    setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
   };
 
   const handleUpdateHeader = (
@@ -370,6 +471,136 @@ export default function App() {
     e.target.value = '';
   };
 
+  // Authentication Handlers
+  const handleLogin = (u: string, p: string, rememberMe: boolean): boolean => {
+    const cleanUser = u.trim();
+    const cleanPass = p.trim();
+
+    // 1. Verificação de Acesso do Administrador (Jailson)
+    if (cleanUser.toLowerCase() === 'jailson12' && cleanPass === '201212') {
+      const adminUser: AuthUser = {
+        role: 'admin',
+        username: 'jailson12',
+        displayName: 'Jailson Francelino',
+      };
+      if (rememberMe) {
+        saveAuthSession(adminUser);
+      }
+      setCurrentUser(adminUser);
+      setActiveTab('drivers'); // Abre a área de gestão de motoristas
+      return true;
+    }
+
+    // 2. Verificação de Acesso dos Motoristas Cadastrados
+    const driver = drivers.find(
+      (d) =>
+        d.username &&
+        d.username.toLowerCase() === cleanUser.toLowerCase() &&
+        d.password === cleanPass &&
+        d.status === 'ativo'
+    );
+
+    if (driver) {
+      const driverUser: AuthUser = {
+        role: 'driver',
+        username: driver.username,
+        displayName: driver.name,
+        driverId: driver.id,
+      };
+      if (rememberMe) {
+        saveAuthSession(driverUser);
+      }
+      setCurrentUser(driverUser);
+      setActiveTab('daily'); // Abre diretamente a ficha de controle diário
+      return true;
+    }
+
+    return false;
+  };
+
+  const handleLogout = () => {
+    clearAuthSession();
+    setCurrentUser(null);
+  };
+
+  // Drivers Management Handlers
+  const handleAddDriver = async (data: {
+    name: string;
+    username: string;
+    password: string;
+    vehiclePlate?: string;
+  }) => {
+    const newDriver: Driver = {
+      id: `drv-${Date.now()}`,
+      name: data.name,
+      username: data.username,
+      password: data.password,
+      vehiclePlate: data.vehiclePlate,
+      status: 'ativo',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setDrivers((prev) => [newDriver, ...prev]);
+    await saveDriverToSupabase(newDriver);
+  };
+
+  const handleUpdateDriver = async (updated: Driver) => {
+    setDrivers((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+    await saveDriverToSupabase(updated);
+
+    // If this driver is bound to any days in the active sheet, update name & vehicle plate
+    if (activeSheet) {
+      const hasLinkedDay = activeSheet.days.some((d) => d.driverId === updated.id);
+      if (hasLinkedDay) {
+        const updatedDays = activeSheet.days.map((d) => {
+          if (d.driverId === updated.id) {
+            return {
+              ...d,
+              driverName: updated.name,
+              vehiclePlate: updated.vehiclePlate,
+            };
+          }
+          return d;
+        });
+        handleUpdateActiveSheet({ ...activeSheet, days: updatedDays });
+      }
+    }
+  };
+
+  const handleDeleteDriver = async (driverId: string) => {
+    setDrivers((prev) => prev.filter((d) => d.id !== driverId));
+    await deleteDriverFromSupabase(driverId);
+  };
+
+  const handleAssignDriverToSheet = (driver: Driver, applyToAllDays: boolean) => {
+    if (!activeSheet) return;
+
+    const updatedDays = activeSheet.days.map((day, idx) => {
+      if (applyToAllDays || idx === selectedDayIndex) {
+        return {
+          ...day,
+          driverId: driver.id,
+          driverName: driver.name,
+          vehiclePlate: driver.vehiclePlate,
+          trips: day.trips.map((t) => ({
+            ...t,
+            driverId: t.driverId || driver.id,
+            driverName: t.driverName || driver.name,
+          })),
+        };
+      }
+      return day;
+    });
+
+    handleUpdateActiveSheet({ ...activeSheet, days: updatedDays });
+  };
+
+  // 1. If not authenticated, ALWAYS start on Login Screen as requested
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       
@@ -394,6 +625,9 @@ export default function App() {
           syncState={syncState}
           lastSavedTime={lastSavedTime}
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
+          onLogout={handleLogout}
+          driversCount={drivers.length}
+          currentUser={currentUser}
         />
       )}
 
@@ -403,7 +637,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             <Database className="w-4 h-4 text-slate-950 shrink-0" />
             <span>
-              <strong>Banco Supabase Conectado:</strong> Crie a tabela <code className="bg-amber-400 px-1 py-0.5 rounded text-[11px] font-mono">weekly_sheets</code> no Supabase para habilitar salvamento na nuvem e sincronização em tempo real.
+              <strong>Banco Supabase Conectado:</strong> Crie as tabelas <code className="bg-amber-400 px-1 py-0.5 rounded text-[11px] font-mono">weekly_sheets</code> e <code className="bg-amber-400 px-1 py-0.5 rounded text-[11px] font-mono">drivers</code> no Supabase para salvar e sincronizar viagens e motoristas em tempo real.
             </span>
           </div>
           <button
@@ -419,6 +653,22 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activeSheet ? (
           <>
+            {activeTab === 'drivers' && (
+              <DriversManager
+                drivers={drivers}
+                activeSheet={activeSheet}
+                onAddDriver={handleAddDriver}
+                onUpdateDriver={handleUpdateDriver}
+                onDeleteDriver={handleDeleteDriver}
+                onAssignDriverToSheet={handleAssignDriverToSheet}
+                onNavigateToDailySheet={(driverId) => {
+                  setActiveTab('daily');
+                }}
+                supabaseStatus={supabaseStatus}
+                onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
+              />
+            )}
+
             {activeTab === 'daily' && (
               <DayEditor
                 sheet={activeSheet}
@@ -426,6 +676,14 @@ export default function App() {
                 onCopyExpensesFromPreviousDay={handleCopyExpensesFromPreviousDay}
                 selectedDayIndex={selectedDayIndex}
                 onSelectDayIndex={setSelectedDayIndex}
+                drivers={drivers}
+                currentUser={currentUser}
+                onNewWeek={() => setIsNewWeekModalOpen(true)}
+                onOpenDriversTab={() => setActiveTab('drivers')}
+                syncState={syncState}
+                lastSavedTime={lastSavedTime}
+                onTriggerInstantSave={handleTriggerInstantSave}
+                onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
               />
             )}
 

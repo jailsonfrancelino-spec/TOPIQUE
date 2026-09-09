@@ -9,7 +9,8 @@ import {
   MessageSquare,
   CheckCircle2,
   Image as ImageIcon,
-  FileText
+  FileText,
+  Camera
 } from 'lucide-react';
 import { DayRecord, WeeklySheet } from '../types';
 import { calculateDayTotals, calculateTripSubtotal, formatCurrency, formatDatePtBR } from '../utils/calculations';
@@ -71,15 +72,19 @@ export const CashPrintModal: React.FC<CashPrintModalProps> = ({
       .join('\n\n');
 
     const expensesText = day.expenses
-      .map((e) => `   • *${e.label}:* ${formatCurrency(e.value || 0)}`)
+      .map((e) => `   • *${e.label}:* ${formatCurrency(e.value || 0)}${e.receiptImage ? ' 📷 [Comprovante Foto Anexo]' : ''}`)
       .join('\n');
+
+    const driverInfoLine = day.driverName
+      ? `👤 *MOTORISTA:* ${day.driverName.toUpperCase()}${day.vehiclePlate ? ` • 🚘 *PLACA:* ${day.vehiclePlate.toUpperCase()}` : ''}\n`
+      : '';
 
     return `🚌 *COMPROVANTE DE FECHAMENTO DE CAIXA*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 *LINHA:* ${sheet.companyRoute}
 📅 *DIA:* ${day.dayLabel.toUpperCase()}
 🗓️ *DATA:* ${formattedDate}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${driverInfoLine}━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🚍 *DETALHAMENTO DE TODAS AS VIAGENS (${day.trips.length} VIAGENS):*
 ${tripsText}
@@ -272,7 +277,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
                 Comprovante para WhatsApp
               </h2>
               <p className="text-xs text-emerald-100">
-                {day.dayLabel} • {formattedDate} • {sheet.companyRoute}
+                {day.dayLabel} • {formattedDate} • {sheet.companyRoute}{day.driverName ? ` • Motorista: ${day.driverName}` : ''}
               </p>
             </div>
           </div>
@@ -492,6 +497,45 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
                   <span>Enviar no WhatsApp</span>
                 </button>
               </div>
+
+              {/* Seção com Comprovantes Fotográficos Anexados */}
+              {day.expenses.some(e => Boolean(e.receiptImage)) && (
+                <div className="w-full mt-6 bg-white rounded-xl border border-slate-200 p-4 shadow-2xs text-left">
+                  <div className="flex items-center gap-2 mb-3 text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    <Camera className="w-4 h-4 text-emerald-600" />
+                    <span>
+                      Comprovantes Fotográficos Anexados ({day.expenses.filter(e => Boolean(e.receiptImage)).length})
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {day.expenses.filter(e => Boolean(e.receiptImage)).map((e) => (
+                      <div key={e.id} className="border border-slate-200 rounded-lg p-2.5 bg-slate-50 flex flex-col gap-2 shadow-2xs">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[11px] font-bold text-slate-800 truncate">{e.label}</span>
+                          <span className="text-[11px] font-mono font-bold text-emerald-700">{formatCurrency(e.value)}</span>
+                        </div>
+
+                        <div className="w-full h-32 bg-slate-200 rounded overflow-hidden border border-slate-200">
+                          <img 
+                            src={e.receiptImage} 
+                            alt={e.label} 
+                            className="w-full h-full object-cover hover:scale-105 transition-transform duration-200" 
+                          />
+                        </div>
+
+                        <a
+                          href={e.receiptImage}
+                          download={`comprovante-${e.label.toLowerCase().replace(/\s+/g, '-')}-${day.date}.jpg`}
+                          className="text-[11px] text-center font-bold text-blue-700 hover:text-blue-900 bg-white border border-slate-300 py-1.5 rounded-lg hover:bg-blue-50 transition-colors shadow-2xs"
+                        >
+                          Baixar Comprovante
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
