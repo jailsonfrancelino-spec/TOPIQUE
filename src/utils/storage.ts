@@ -3,12 +3,34 @@ import { calculateDayTotals, calculateTripSubtotal, calculateWeeklyTotals, forma
 
 const STORAGE_KEY = 'transport_cashflow_sheets_v1';
 const ACTIVE_SHEET_ID_KEY = 'transport_cashflow_active_id_v1';
+export const DEFAULT_ROUTE = 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON';
 
-export function getMonday(d: Date): Date {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = date.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
-  return new Date(date.setDate(diff));
+/**
+ * Retorna sempre a SEGUNDA-FEIRA correspondente à data fornecida,
+ * usando meio-dia (12:00) para evitar desvios de fuso horário / UTC.
+ * Domingo (0) volta 6 dias para a Segunda da mesma semana.
+ */
+export function getMonday(input?: Date | string): Date {
+  let date: Date;
+  if (!input) {
+    const now = new Date();
+    date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+  } else if (typeof input === 'string') {
+    const cleanStr = input.split('T')[0];
+    const parts = cleanStr.split('-');
+    if (parts.length === 3) {
+      date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0);
+    } else {
+      const now = new Date();
+      date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    }
+  } else {
+    date = new Date(input.getFullYear(), input.getMonth(), input.getDate(), 12, 0, 0);
+  }
+
+  const day = date.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+  const diff = day === 0 ? -6 : 1 - day;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff, 12, 0, 0);
 }
 
 export function formatDateIso(d: Date): string {
@@ -16,6 +38,15 @@ export function formatDateIso(d: Date): string {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * Desloca a semana atual em N semanas (ex: -1 para semana anterior, +1 para próxima)
+ */
+export function shiftWeekIso(startDateIso: string, weeksDelta: number): string {
+  const currentMonday = getMonday(startDateIso);
+  currentMonday.setDate(currentMonday.getDate() + weeksDelta * 7);
+  return formatDateIso(currentMonday);
 }
 
 export function createEmptyDay(dayOfWeek: DayRecord['dayOfWeek'], dayLabel: string, dateIso: string): DayRecord {
@@ -79,9 +110,8 @@ export function createEmptyDay(dayOfWeek: DayRecord['dayOfWeek'], dayLabel: stri
   };
 }
 
-export function createNewWeeklySheet(startDateInput?: string, vehiclePlate = 'MTO-4A82', route = 'Transporte de Passageiros e Encomendas — Tianguá x Viçosa'): WeeklySheet {
-  const baseDate = startDateInput ? new Date(startDateInput) : new Date();
-  const monday = getMonday(baseDate);
+export function createNewWeeklySheet(startDateInput?: string, _vehiclePlate?: string, route = DEFAULT_ROUTE): WeeklySheet {
+  const monday = getMonday(startDateInput);
   
   const dayConfigs: { dayOfWeek: DayRecord['dayOfWeek']; label: string; offset: number }[] = [
     { dayOfWeek: 'segunda', label: 'Segunda-feira', offset: 0 },
@@ -94,18 +124,15 @@ export function createNewWeeklySheet(startDateInput?: string, vehiclePlate = 'MT
   ];
 
   const days: DayRecord[] = dayConfigs.map((cfg) => {
-    const dayDate = new Date(monday);
-    dayDate.setDate(monday.getDate() + cfg.offset);
+    const dayDate = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + cfg.offset, 12, 0, 0);
     return createEmptyDay(cfg.dayOfWeek, cfg.label, formatDateIso(dayDate));
   });
 
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 12, 0, 0);
 
   return {
     id: `sheet-${Date.now()}`,
     companyRoute: route,
-    vehiclePlate: vehiclePlate,
     startDate: formatDateIso(monday),
     endDate: formatDateIso(sunday),
     days,
@@ -114,8 +141,33 @@ export function createNewWeeklySheet(startDateInput?: string, vehiclePlate = 'MT
   };
 }
 
+/**
+ * Atualiza com precisão as datas de uma ficha existente para uma nova semana
+ * garantindo início na Segunda-feira e término no Domingo.
+ */
+export function updateSheetDatesForWeek(sheet: WeeklySheet, anyDateInWeek: string): WeeklySheet {
+  const monday = getMonday(anyDateInWeek);
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 12, 0, 0);
+
+  const updatedDays = sheet.days.map((day, idx) => {
+    const dayDate = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + idx, 12, 0, 0);
+    return {
+      ...day,
+      date: formatDateIso(dayDate),
+    };
+  });
+
+  return {
+    ...sheet,
+    startDate: formatDateIso(monday),
+    endDate: formatDateIso(sunday),
+    days: updatedDays,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function createSampleWeeklySheet(): WeeklySheet {
-  const sheet = createNewWeeklySheet('2026-09-07', 'KLD-9821', 'Transporte de Passageiros e Encomendas — Tianguá x Viçosa');
+  const sheet = createNewWeeklySheet('2026-09-07', undefined, DEFAULT_ROUTE);
   sheet.id = 'sheet-sample-tiangua-vicosa';
 
   // Sample data realistic for Tianguá x Viçosa (Passageiros e Encomendas)
@@ -123,6 +175,11 @@ export function createSampleWeeklySheet(): WeeklySheet {
   sheet.days[0].trips[0] = { ...sheet.days[0].trips[0], ida: 240, volta: 260, encom: 80, pix: 180 };
   sheet.days[0].trips[1] = { ...sheet.days[0].trips[1], ida: 190, volta: 220, encom: 50, pix: 120 };
   sheet.days[0].trips[2] = { ...sheet.days[0].trips[2], ida: 210, volta: 180, encom: 90, pix: 140 };
+  sheet.days[0].trips[3] = { ...sheet.days[0].trips[3], ida: 280, volta: 310, encom: 110, pix: 220 };
+  sheet.days[0].expenses[0].value = 130; // Motorista
+  sheet.days[0].expenses[1].value = 80;  // Cobrador
+  sheet.days[0].expenses[2].value = 240; // Combustível
+  sheet.days[0].expenses[3].value = 35;  // Outras (Pedágio/Lanche)
   sheet.days[0].trips[3] = { ...sheet.days[0].trips[3], ida: 280, volta: 310, encom: 110, pix: 220 };
   sheet.days[0].expenses[0].value = 130; // Motorista
   sheet.days[0].expenses[1].value = 80;  // Cobrador
@@ -237,7 +294,6 @@ export function exportSheetToCsv(sheet: WeeklySheet): void {
 
   lines.push(`"FICHA DE CONTROLE DIÁRIO E SEMANAL"`);
   lines.push(`"ROTA: ${sheet.companyRoute}"`);
-  lines.push(`"VEÍCULO / PLACA: ${sheet.vehiclePlate}"`);
   lines.push(`"PERÍODO: De ${sheet.startDate} a ${sheet.endDate}"`);
   lines.push('');
 
@@ -275,7 +331,7 @@ export function exportSheetToCsv(sheet: WeeklySheet): void {
   const encodedUri = encodeURI(csvContent);
   const link = document.createElement('a');
   link.setAttribute('href', encodedUri);
-  link.setAttribute('download', `fechamento_${sheet.vehiclePlate.replace(/\s+/g, '_')}_${sheet.startDate}.csv`);
+  link.setAttribute('download', `fechamento_transporte_${sheet.startDate}_a_${sheet.endDate}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

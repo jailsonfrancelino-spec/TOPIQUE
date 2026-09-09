@@ -2,17 +2,16 @@ import React, { useState } from 'react';
 import { 
   Bus, 
   Calendar, 
-  Car, 
   CheckCircle2, 
+  ChevronLeft, 
+  ChevronRight, 
   Download, 
   FileSpreadsheet, 
   FileText, 
   History, 
-  MapPin, 
   PlusCircle, 
   Printer, 
-  RotateCcw, 
-  Upload
+  RotateCcw
 } from 'lucide-react';
 import { WeeklySheet } from '../types';
 import { formatDatePtBR } from '../utils/calculations';
@@ -21,7 +20,9 @@ interface HeaderProps {
   sheet: WeeklySheet;
   sheetsList: WeeklySheet[];
   onSelectSheet: (id: string) => void;
-  onUpdateHeader: (updates: Partial<Pick<WeeklySheet, 'companyRoute' | 'vehiclePlate' | 'startDate' | 'endDate'>>) => void;
+  onChangeWeekDate: (newDateIso: string) => void;
+  onShiftWeek: (weeksDelta: number) => void;
+  onUpdateHeader: (updates: Partial<Pick<WeeklySheet, 'companyRoute' | 'startDate' | 'endDate'>>) => void;
   onNewWeek: () => void;
   onLoadSample: () => void;
   onPrint: () => void;
@@ -36,33 +37,30 @@ export const Header: React.FC<HeaderProps> = ({
   sheet,
   sheetsList,
   onSelectSheet,
+  onChangeWeekDate,
+  onShiftWeek,
   onUpdateHeader,
   onNewWeek,
   onLoadSample,
   onPrint,
   onExportCsv,
-  onExportJson,
-  onImportJson,
   activeTab,
   setActiveTab,
 }) => {
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [routeInput, setRouteInput] = useState(sheet.companyRoute);
-  const [plateInput, setPlateInput] = useState(sheet.vehiclePlate);
-  const [fileInputRef, setFileInputRef] = useState<HTMLInputElement | null>(null);
 
   const handleSaveHeader = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateHeader({
-      companyRoute: routeInput.trim() || 'Transporte de Passageiros e Encomendas',
-      vehiclePlate: plateInput.trim() || 'Sem Placa',
+      companyRoute: routeInput.trim() || 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON',
     });
     setIsEditingHeader(false);
   };
 
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs print:hidden">
-      {/* Top Banner with Route and Vehicle */}
+      {/* Top Banner with Route & Brand */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-slate-100">
           
@@ -84,17 +82,16 @@ export const Header: React.FC<HeaderProps> = ({
 
               {!isEditingHeader ? (
                 <div className="flex items-center gap-2 mt-0.5">
-                  <h1 className="text-lg sm:text-xl font-bold text-slate-900 leading-tight flex items-center gap-1.5">
+                  <h1 className="text-base sm:text-lg lg:text-xl font-black text-slate-900 leading-tight">
                     {sheet.companyRoute}
                   </h1>
                   <button
                     onClick={() => {
                       setRouteInput(sheet.companyRoute);
-                      setPlateInput(sheet.vehiclePlate);
                       setIsEditingHeader(true);
                     }}
                     className="text-xs text-blue-600 hover:text-blue-800 hover:underline cursor-pointer ml-1"
-                    title="Editar rota e placa do veículo"
+                    title="Editar nome da rota ou linha"
                   >
                     Editar
                   </button>
@@ -105,16 +102,9 @@ export const Header: React.FC<HeaderProps> = ({
                     type="text"
                     value={routeInput}
                     onChange={(e) => setRouteInput(e.target.value)}
-                    placeholder="Nome da Rota / Empresa"
-                    className="text-sm px-2.5 py-1 border border-blue-400 rounded-md bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-medium text-slate-800 w-64"
+                    placeholder="Nome da Linha / Rota"
+                    className="text-sm px-2.5 py-1 border border-blue-400 rounded-md bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-medium text-slate-800 w-80 max-w-full"
                     autoFocus
-                  />
-                  <input
-                    type="text"
-                    value={plateInput}
-                    onChange={(e) => setPlateInput(e.target.value)}
-                    placeholder="Placa / Veículo"
-                    className="text-sm px-2.5 py-1 border border-blue-400 rounded-md bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-medium text-slate-800 w-32 uppercase"
                   />
                   <button
                     type="submit"
@@ -134,34 +124,64 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Quick controls: Vehicle Plate, Week Picker, Quick actions */}
+          {/* Week Date Picker & Week Navigation Controls */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Vehicle Pill */}
-            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700">
-              <Car className="w-3.5 h-3.5 text-slate-500" />
-              <span>VEÍCULO:</span>
-              <span className="text-blue-700 font-bold uppercase">{sheet.vehiclePlate || 'Não informado'}</span>
+            
+            {/* Week Navigator (Previous / Date Picker / Next) */}
+            <div className="flex items-center bg-slate-100 border border-slate-300 rounded-xl p-1 gap-1">
+              <button
+                onClick={() => onShiftWeek(-1)}
+                className="p-1.5 text-slate-700 hover:text-blue-800 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                title="Semana anterior (Segunda a Domingo)"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-white rounded-lg border border-slate-200 shadow-2xs">
+                <Calendar className="w-4 h-4 text-blue-700 flex-shrink-0" />
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase leading-none">
+                    Mudar Semana:
+                  </span>
+                  <input
+                    type="date"
+                    value={sheet.startDate}
+                    onChange={(e) => onChangeWeekDate(e.target.value)}
+                    className="text-xs font-bold text-slate-900 bg-transparent border-none p-0 focus:ring-0 cursor-pointer"
+                    title="Escolha qualquer dia para carregar a semana correspondente (Segunda a Domingo)"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={() => onShiftWeek(1)}
+                className="p-1.5 text-slate-700 hover:text-blue-800 hover:bg-white rounded-lg transition-colors cursor-pointer"
+                title="Próxima semana (Segunda a Domingo)"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Week date range */}
-            <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700">
-              <Calendar className="w-3.5 h-3.5 text-slate-500" />
-              <span>SEMANA:</span>
-              <span className="font-semibold text-slate-900">
+            {/* Week range indicator */}
+            <div className="hidden sm:flex flex-col bg-blue-50 border border-blue-200 px-3 py-1 rounded-xl text-xs">
+              <span className="text-[10px] font-bold text-blue-800 uppercase">
+                Período Atual (Seg a Dom)
+              </span>
+              <span className="font-extrabold text-blue-950 font-mono text-xs">
                 {formatDatePtBR(sheet.startDate)} a {formatDatePtBR(sheet.endDate)}
               </span>
             </div>
 
-            {/* Week selector dropdown */}
+            {/* Week selector dropdown for stored sheets */}
             <select
               value={sheet.id}
               onChange={(e) => onSelectSheet(e.target.value)}
-              className="text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-700 font-medium focus:ring-2 focus:ring-blue-500 cursor-pointer"
-              title="Alternar entre semanas gravadas"
+              className="text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-2 text-slate-700 font-semibold focus:ring-2 focus:ring-blue-500 cursor-pointer max-w-[190px]"
+              title="Alternar entre semanas salvas"
             >
               {sheetsList.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {formatDatePtBR(s.startDate)} - {s.vehiclePlate} ({s.days.length} dias)
+                  {formatDatePtBR(s.startDate)} a {formatDatePtBR(s.endDate)}
                 </option>
               ))}
             </select>
@@ -169,10 +189,10 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Nova Semana Button */}
             <button
               onClick={onNewWeek}
-              className="inline-flex items-center gap-1 bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors cursor-pointer shadow-2xs"
+              className="inline-flex items-center gap-1.5 bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-colors cursor-pointer shadow-xs min-h-[38px]"
               title="Iniciar uma nova semana limpa"
             >
-              <PlusCircle className="w-3.5 h-3.5" />
+              <PlusCircle className="w-4 h-4" />
               <span>Nova Semana</span>
             </button>
           </div>

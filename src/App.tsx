@@ -13,7 +13,10 @@ import {
   createNewWeeklySheet, 
   createSampleWeeklySheet, 
   exportSheetToCsv, 
-  exportBackupJson 
+  exportBackupJson,
+  getMonday,
+  formatDateIso,
+  updateSheetDatesForWeek
 } from './utils/storage';
 import { Header } from './components/Header';
 import { DayEditor } from './components/DayEditor';
@@ -99,8 +102,37 @@ export default function App() {
     });
   };
 
-  const handleCreateNewWeek = (startDate: string, vehiclePlate: string, companyRoute: string) => {
-    const newSheet = createNewWeeklySheet(startDate, vehiclePlate, companyRoute);
+  const handleUpdateWeekStartDate = (newIsoDate: string) => {
+    if (!activeSheet || !newIsoDate) return;
+    const parts = newIsoDate.split('-').map(Number);
+    const dateObj = (parts.length === 3 && !isNaN(parts[0]))
+      ? new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0)
+      : new Date();
+    
+    const mondayObj = getMonday(dateObj);
+    const mondayIso = formatDateIso(mondayObj);
+    const updatedSheet = updateSheetDatesForWeek(activeSheet, mondayIso);
+
+    setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
+  };
+
+  const handleShiftWeek = (delta: number) => {
+    if (!activeSheet) return;
+    const parts = activeSheet.startDate.split('-').map(Number);
+    const dateObj = (parts.length === 3 && !isNaN(parts[0]))
+      ? new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0)
+      : new Date();
+    
+    dateObj.setDate(dateObj.getDate() + (delta * 7));
+    const mondayObj = getMonday(dateObj);
+    const mondayIso = formatDateIso(mondayObj);
+    const updatedSheet = updateSheetDatesForWeek(activeSheet, mondayIso);
+
+    setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
+  };
+
+  const handleCreateNewWeek = (startDate: string, companyRoute: string) => {
+    const newSheet = createNewWeeklySheet(startDate, undefined, companyRoute);
     setSheets((prev) => [newSheet, ...prev]);
     setActiveId(newSheet.id);
     setActiveTab('daily');
@@ -187,6 +219,8 @@ export default function App() {
           sheet={activeSheet}
           sheetsList={sheets}
           onSelectSheet={handleSelectSheet}
+          onChangeWeekDate={handleUpdateWeekStartDate}
+          onShiftWeek={handleShiftWeek}
           onUpdateHeader={handleUpdateHeader}
           onNewWeek={() => setIsNewWeekModalOpen(true)}
           onLoadSample={handleLoadSample}
@@ -247,7 +281,7 @@ export default function App() {
           <div className="text-center py-16">
             <h2 className="text-lg font-bold text-slate-700">Nenhuma ficha semanal encontrada</h2>
             <button
-              onClick={() => handleCreateNewWeek('2026-09-07', 'MTO-4A82', 'Transporte de Passageiros e Encomendas — Tianguá x Viçosa')}
+              onClick={() => handleCreateNewWeek('2026-09-07', 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON')}
               className="mt-4 px-4 py-2 bg-blue-700 text-white font-semibold rounded-lg hover:bg-blue-800"
             >
               Criar Nova Ficha
@@ -260,10 +294,10 @@ export default function App() {
       <footer className="bg-white border-t border-slate-200 py-4 px-4 text-center text-xs text-slate-500 print:hidden">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
-            <strong>Fluxo de Caixa Operacional</strong> • Transporte de Passageiros e Encomendas (Tianguá x Viçosa)
+            <strong>TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON</strong> • Fluxo de Caixa Operacional
           </div>
           <div className="flex items-center gap-4 text-slate-400">
-            <span>Formato oficial compatível com prancheta física e fechamento contábil</span>
+            <span>Controle Diário, Fechamento Semanal e Comprovantes em Imagem para WhatsApp</span>
           </div>
         </div>
       </footer>
@@ -274,7 +308,6 @@ export default function App() {
           isOpen={isNewWeekModalOpen}
           onClose={() => setIsNewWeekModalOpen(false)}
           onCreate={handleCreateNewWeek}
-          defaultPlate={activeSheet.vehiclePlate}
           defaultRoute={activeSheet.companyRoute}
         />
       )}

@@ -92,12 +92,6 @@ export const PrintableSheet: React.FC<PrintableSheetProps> = ({ sheet }) => {
                   {printBlank ? '____/____/____' : formatDatePtBR(sheet.endDate)}
                 </span>
               </div>
-              <div className="mt-0.5">
-                <span className="font-bold">VEÍCULO / PLACA:</span>{' '}
-                <span className="font-bold underline">
-                  {printBlank ? '____________________' : sheet.vehiclePlate}
-                </span>
-              </div>
             </div>
           </div>
 
@@ -260,7 +254,7 @@ export const PrintableSheet: React.FC<PrintableSheetProps> = ({ sheet }) => {
               </h2>
             </div>
             <div className="text-xs text-blue-200 font-medium">
-              Veículo: <span className="font-bold text-white">{sheet.vehiclePlate}</span>
+              Semana: <span className="font-bold text-white">{formatDatePtBR(sheet.startDate)} a {formatDatePtBR(sheet.endDate)}</span>
             </div>
           </div>
 

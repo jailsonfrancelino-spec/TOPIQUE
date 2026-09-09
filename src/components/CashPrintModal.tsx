@@ -1,27 +1,18 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   X, 
   Share2, 
   Download, 
   Copy, 
   Check, 
-  Printer, 
-  Calendar, 
-  Car, 
-  Wallet, 
-  Fuel, 
-  User, 
-  Users, 
   Receipt, 
   MessageSquare,
-  Sparkles,
-  ArrowRight,
-  ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  Image as ImageIcon
 } from 'lucide-react';
-import html2canvas from 'html2canvas';
 import { DayRecord, WeeklySheet } from '../types';
 import { calculateDayTotals, calculateTripSubtotal, formatCurrency, formatDatePtBR } from '../utils/calculations';
+import { generateTicketCanvas } from '../utils/ticketCanvas';
 
 interface CashPrintModalProps {
   isOpen: boolean;
@@ -36,24 +27,33 @@ export const CashPrintModal: React.FC<CashPrintModalProps> = ({
   onClose,
   sheet,
   day,
-  dayIndex,
 }) => {
-  const ticketRef = useRef<HTMLDivElement>(null);
   const [copiedText, setCopiedText] = useState(false);
+  const [copiedImage, setCopiedImage] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [imageGeneratedToast, setImageGeneratedToast] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'image' | 'text'>('image');
-
-  if (!isOpen) return null;
+  const [previewDataUrl, setPreviewDataUrl] = useState<string>('');
 
   const totals = calculateDayTotals(day);
   const formattedDate = formatDatePtBR(day.date);
-  const isPositiveCash = totals.sobraDinheiroEspecie >= 0;
-  const isPositiveLiquida = totals.sobraLiquida >= 0;
 
-  // Generate clean, complete and formatted WhatsApp message showing the Day and ALL TRIPS
+  // Generate canvas preview whenever modal opens or day changes
+  useEffect(() => {
+    if (isOpen && day) {
+      try {
+        const canvas = generateTicketCanvas(day, sheet);
+        setPreviewDataUrl(canvas.toDataURL('image/png'));
+      } catch (err) {
+        console.error('Erro ao renderizar canvas:', err);
+      }
+    }
+  }, [isOpen, day, sheet]);
+
+  if (!isOpen) return null;
+
+  // Generate clean, complete and formatted WhatsApp message showing the Day and ALL TRIPS (without vehiclePlate)
   const generateWhatsAppMessage = () => {
-    // List ALL trips without filtering out any trip
     const tripsText = day.trips
       .map((t, index) => {
         const sub = calculateTripSubtotal(t);
@@ -73,10 +73,9 @@ export const CashPrintModal: React.FC<CashPrintModalProps> = ({
 
     return `🚌 *COMPROVANTE DE FECHAMENTO DE CAIXA*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 *LINHA:* ${sheet.companyRoute}
 📅 *DIA:* ${day.dayLabel.toUpperCase()}
 🗓️ *DATA:* ${formattedDate}
-🚐 *VEÍCULO / PLACA:* ${sheet.vehiclePlate || 'Não informada'}
-📍 *ROTA:* ${sheet.companyRoute}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🚍 *DETALHAMENTO DE TODAS AS VIAGENS (${day.trips.length} VIAGENS):*
@@ -125,21 +124,13 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
     window.open(url, '_blank');
   };
 
-  const handleDownloadImage = async () => {
-    if (!ticketRef.current) return;
+  const handleDownloadImage = () => {
     try {
       setIsGeneratingImage(true);
-      const canvas = await html2canvas(ticketRef.current, {
-        scale: 2.5,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-      });
-
+      const canvas = generateTicketCanvas(day, sheet);
       const dataUrl = canvas.toDataURL('image/png');
       const safeDate = day.date.replace(/[^a-zA-Z0-9]/g, '-');
-      const safePlate = (sheet.vehiclePlate || 'veiculo').replace(/[^a-zA-Z0-9]/g, '_');
-      const filename = `Fechamento_Caixa_${day.dayOfWeek}_${safePlate}_${safeDate}.png`;
+      const filename = `Comprovante_Caixa_${day.dayOfWeek}_${safeDate}.png`;
 
       const link = document.createElement('a');
       link.href = dataUrl;
@@ -148,11 +139,48 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
       link.click();
       document.body.removeChild(link);
 
-      setImageGeneratedToast('Print do Caixa baixado com sucesso!');
+      setImageGeneratedToast('Comprovante baixado com sucesso!');
       setTimeout(() => setImageGeneratedToast(null), 3500);
     } catch (err) {
-      console.error('Erro ao gerar print:', err);
-      alert('Não foi possível gerar a imagem automaticamente. Você pode copiar o texto para o WhatsApp.');
+      console.error('Erro ao baixar imagem:', err);
+      alert('Houve um erro ao baixar a imagem. Você pode copiar o texto para o WhatsApp.');
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const handleCopyImageToClipboard = async () => {
+    try {
+      setIsGeneratingImage(true);
+      const canvas = generateTicketCanvas(day, sheet);
+      
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          handleCopyText();
+          return;
+        }
+        if (navigator.clipboard && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([
+              new ClipboardItem({ 'image/png': blob }),
+            ]);
+            setCopiedImage(true);
+            setImageGeneratedToast('Imagem copiada! Cole direto no WhatsApp com Ctrl+V.');
+            setTimeout(() => {
+              setCopiedImage(false);
+              setImageGeneratedToast(null);
+            }, 3500);
+            return;
+          } catch {
+            handleDownloadImage();
+          }
+        } else {
+          handleDownloadImage();
+        }
+      }, 'image/png');
+    } catch (err) {
+      console.error('Erro ao copiar imagem:', err);
+      handleDownloadImage();
     } finally {
       setIsGeneratingImage(false);
     }
@@ -160,52 +188,58 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
 
   const handleShareMobile = async () => {
     const text = generateWhatsAppMessage();
+    try {
+      setIsGeneratingImage(true);
+      const canvas = generateTicketCanvas(day, sheet);
 
-    // Check if Web Share API with files is supported
-    if (ticketRef.current && navigator.canShare && navigator.share) {
-      try {
-        setIsGeneratingImage(true);
-        const canvas = await html2canvas(ticketRef.current, {
-          scale: 2.5,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          logging: false,
-        });
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          handleOpenWhatsApp();
+          return;
+        }
 
-        canvas.toBlob(async (blob) => {
-          if (blob) {
-            const file = new File([blob], `fechamento_${day.dayOfWeek}.png`, { type: 'image/png' });
-            if (navigator.canShare({ files: [file] })) {
-              try {
-                await navigator.share({
-                  files: [file],
-                  title: `Fechamento Caixa - ${day.dayLabel}`,
-                  text: text,
-                });
-                return;
-              } catch (shareErr) {
-                // User cancelled or share failed, fallback to whatsapp link
-                handleOpenWhatsApp();
-              }
-            } else {
-              // Fallback to text share
-              await navigator.share({
-                title: `Fechamento Caixa - ${day.dayLabel}`,
-                text: text,
-              });
-            }
-          } else {
-            handleOpenWhatsApp();
+        const safeDate = day.date.replace(/[^a-zA-Z0-9]/g, '-');
+        const file = new File([blob], `Comprovante_${day.dayOfWeek}_${safeDate}.png`, { type: 'image/png' });
+
+        // Se suportar compartilhamento de arquivos nativo do celular
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              title: `Comprovante de Fechamento - ${day.dayLabel}`,
+              text: text,
+              files: [file],
+            });
+            return;
+          } catch (shareErr) {
+            console.log('Compartilhamento cancelado ou fallback', shareErr);
           }
-        }, 'image/png');
-      } catch (err) {
-        handleOpenWhatsApp();
-      } finally {
-        setIsGeneratingImage(false);
-      }
-    } else {
-      // Direct WhatsApp text link fallback
+        }
+
+        // Se estiver no computador ou navegador desktop, copia a imagem e abre o WhatsApp
+        if (navigator.clipboard && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([
+              new ClipboardItem({ 'image/png': blob }),
+            ]);
+            setImageGeneratedToast('Imagem copiada! Abrindo WhatsApp...');
+            setTimeout(() => {
+              handleOpenWhatsApp();
+            }, 800);
+            return;
+          } catch {
+            // Se falhar a cópia, baixa e abre
+          }
+        }
+
+        // Fallback garantido: baixa a imagem e abre WhatsApp
+        handleDownloadImage();
+        setTimeout(() => handleOpenWhatsApp(), 600);
+      }, 'image/png');
+    } catch (err) {
+      console.error('Erro ao compartilhar:', err);
       handleOpenWhatsApp();
+    } finally {
+      setIsGeneratingImage(false);
     }
   };
 
@@ -221,10 +255,10 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-bold">
-                Print do Caixa & Enviar no WhatsApp
+                Comprovante para WhatsApp
               </h2>
               <p className="text-xs text-emerald-100">
-                {day.dayLabel} • {formattedDate} • Veículo: {sheet.vehiclePlate}
+                {day.dayLabel} • {formattedDate} • {sheet.companyRoute}
               </p>
             </div>
           </div>
@@ -244,10 +278,11 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
             {/* Direct WhatsApp Share */}
             <button
               onClick={handleShareMobile}
+              disabled={isGeneratingImage}
               className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
             >
               <Share2 className="w-4 h-4" />
-              <span>Compartilhar no WhatsApp</span>
+              <span>Enviar Imagem no WhatsApp</span>
             </button>
 
             {/* Download Print Image */}
@@ -257,7 +292,27 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
               className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px] disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
-              <span>{isGeneratingImage ? 'Gerando Print...' : 'Baixar Imagem (Print)'}</span>
+              <span>{isGeneratingImage ? 'Processando...' : 'Baixar Imagem (PNG)'}</span>
+            </button>
+
+            {/* Copy Image to Clipboard */}
+            <button
+              onClick={handleCopyImageToClipboard}
+              disabled={isGeneratingImage}
+              className="inline-flex items-center justify-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold text-xs px-3 py-2 rounded-xl transition-colors cursor-pointer min-h-[44px]"
+              title="Copia a imagem para a área de transferência para colar com Ctrl+V"
+            >
+              {copiedImage ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span className="text-emerald-700 font-bold">Copiada!</span>
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-4 h-4 text-slate-500" />
+                  <span>Copiar Imagem</span>
+                </>
+              )}
             </button>
           </div>
 
@@ -274,7 +329,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
             ) : (
               <>
                 <Copy className="w-3.5 h-3.5 text-slate-500" />
-                <span>Copiar Texto Formatado</span>
+                <span>Copiar Texto</span>
               </>
             )}
           </button>
@@ -282,8 +337,8 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
 
         {/* Toast alerts */}
         {imageGeneratedToast && (
-          <div className="bg-emerald-700 text-white px-4 py-2 text-xs text-center font-medium flex items-center justify-center gap-1.5 animate-fadeIn">
-            <CheckCircle2 className="w-4 h-4 text-emerald-200" />
+          <div className="bg-emerald-700 text-white px-4 py-2.5 text-xs text-center font-semibold flex items-center justify-center gap-1.5 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 text-emerald-200 flex-shrink-0" />
             <span>{imageGeneratedToast}</span>
           </div>
         )}
@@ -300,7 +355,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
               }`}
             >
               <Receipt className="w-3.5 h-3.5" />
-              <span>Comprovante em Imagem</span>
+              <span>Formato de Imagem (WhatsApp)</span>
             </button>
             <button
               onClick={() => setActiveTab('text')}
@@ -349,7 +404,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
               <div className="mt-3 flex gap-2">
                 <button
                   onClick={handleOpenWhatsApp}
-                  className="w-full inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-xs cursor-pointer"
+                  className="w-full inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl shadow-xs cursor-pointer min-h-[44px]"
                 >
                   <Share2 className="w-4 h-4" />
                   <span>Abrir WhatsApp e Enviar Mensagem</span>
@@ -357,189 +412,48 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
               </div>
             </div>
           ) : (
-            /* IMAGE VIEW: The Print Card / Digital Ticket Container */
-            <div className="max-w-xl mx-auto">
-              <p className="text-xs text-slate-500 text-center mb-2.5">
-                📸 Comprovante completo com <strong>{day.dayLabel.toUpperCase()}</strong> e <strong>TODAS AS {day.trips.length} VIAGENS</strong>:
-              </p>
-
-              <div 
-                ref={ticketRef}
-                className="bg-white rounded-2xl border-2 border-slate-300 shadow-md p-4 sm:p-6 text-slate-900 font-sans"
-                style={{ width: '100%' }}
-              >
-                
-                {/* Ticket Top Header */}
-                <div className="text-center pb-3 border-b-2 border-dashed border-slate-300">
-                  <div className="inline-flex items-center justify-center p-2 bg-blue-50 text-blue-800 rounded-xl mb-1">
-                    <Car className="w-6 h-6 text-blue-700" />
-                  </div>
-                  <h3 className="text-base font-black tracking-wider uppercase text-slate-900">
-                    COMPROVANTE DE FECHAMENTO DE CAIXA
-                  </h3>
-                  <p className="text-xs font-bold text-blue-900 uppercase tracking-wide">
-                    {sheet.companyRoute}
-                  </p>
-                  
-                  {/* Big Prominent Day Banner */}
-                  <div className="mt-3 bg-emerald-700 text-white py-2.5 px-3 rounded-xl shadow-xs">
-                    <div className="text-[10px] font-bold tracking-widest text-emerald-200 uppercase">
-                      FECHAMENTO DIÁRIO OFICIAL
-                    </div>
-                    <div className="text-lg sm:text-xl font-black tracking-wide uppercase">
-                      {day.dayLabel} — {formattedDate}
-                    </div>
-                    <div className="text-xs text-emerald-100 font-mono mt-0.5 flex items-center justify-center gap-2 flex-wrap">
-                      <span>PLACA: <strong>{sheet.vehiclePlate || 'BRA-2026'}</strong></span>
-                      <span>•</span>
-                      <span>SEMANA: <strong>{sheet.weekStartDate} a {sheet.weekEndDate}</strong></span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Viagens Section: Complete Table of ALL Trips */}
-                <div className="py-3 border-b border-slate-200">
-                  <div className="flex items-center justify-between text-xs font-black text-slate-800 uppercase mb-2">
-                    <span>TODAS AS VIAGENS DO DIA ({day.trips.length} VIAGENS)</span>
-                    <span className="text-[10px] text-slate-500 font-medium">Valores em Reais (R$)</span>
-                  </div>
-
-                  <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="w-full text-xs border-collapse">
-                      <thead>
-                        <tr className="bg-slate-100 text-slate-700 border-b border-slate-200 text-[11px]">
-                          <th className="py-2 px-2.5 text-left font-bold text-slate-900">Viagem</th>
-                          <th className="py-2 px-2 text-right font-bold">Ida</th>
-                          <th className="py-2 px-2 text-right font-bold">Volta</th>
-                          <th className="py-2 px-2 text-right font-bold">Enc.</th>
-                          <th className="py-2 px-2 text-right font-bold text-blue-800 bg-blue-50/70">PIX</th>
-                          <th className="py-2 px-2.5 text-right font-black text-slate-900 bg-slate-200/50">Subtotal</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-mono">
-                        {day.trips.map((t, idx) => {
-                          const sub = calculateTripSubtotal(t);
-                          return (
-                            <tr key={t.id || idx} className="hover:bg-slate-50/80">
-                              <td className="py-1.5 px-2.5 font-sans font-bold text-slate-900 whitespace-nowrap">
-                                {t.tripName || `${idx + 1}ª Viagem`}
-                              </td>
-                              <td className="py-1.5 px-2 text-right text-slate-700">
-                                {t.ida > 0 ? t.ida.toFixed(2) : '-'}
-                              </td>
-                              <td className="py-1.5 px-2 text-right text-slate-700">
-                                {t.volta > 0 ? t.volta.toFixed(2) : '-'}
-                              </td>
-                              <td className="py-1.5 px-2 text-right text-slate-700">
-                                {t.encom > 0 ? t.encom.toFixed(2) : '-'}
-                              </td>
-                              <td className="py-1.5 px-2 text-right font-semibold text-blue-700 bg-blue-50/40">
-                                {t.pix > 0 ? t.pix.toFixed(2) : '-'}
-                              </td>
-                              <td className="py-1.5 px-2.5 text-right font-bold text-slate-950 bg-slate-50/60">
-                                {formatCurrency(sub)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-300 bg-slate-100 font-mono font-bold text-slate-900">
-                          <td className="py-2 px-2.5 font-sans text-slate-900 uppercase text-[10px] font-black">
-                            TOTAIS
-                          </td>
-                          <td className="py-2 px-2 text-right text-[11px] text-slate-800">{totals.totalIda.toFixed(2)}</td>
-                          <td className="py-2 px-2 text-right text-[11px] text-slate-800">{totals.totalVolta.toFixed(2)}</td>
-                          <td className="py-2 px-2 text-right text-[11px] text-slate-800">{totals.totalEncom.toFixed(2)}</td>
-                          <td className="py-2 px-2 text-right text-[11px] text-blue-800 bg-blue-100/50">{totals.totalPix.toFixed(2)}</td>
-                          <td className="py-2 px-2.5 text-right text-xs font-black text-blue-950 bg-blue-50">
-                            {formatCurrency(totals.totalArrecadado)}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-
-                  {/* Payment Breakdown Cards */}
-                  <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-blue-50/80 p-2.5 rounded-lg border border-blue-200">
-                      <span className="text-[10px] text-blue-700 font-bold uppercase block">Recebido em PIX (Conta)</span>
-                      <span className="font-mono font-black text-blue-950 text-sm">{formatCurrency(totals.totalPix)}</span>
-                      <span className="text-[9px] text-blue-600 block mt-0.5">Transferido diretamente ao banco</span>
-                    </div>
-                    <div className="bg-emerald-50/80 p-2.5 rounded-lg border border-emerald-200">
-                      <span className="text-[10px] text-emerald-700 font-bold uppercase block">Recebido em Dinheiro</span>
-                      <span className="font-mono font-black text-emerald-950 text-sm">{formatCurrency(totals.totalDinheiro)}</span>
-                      <span className="text-[9px] text-emerald-600 block mt-0.5">Cédulas físicas recebidas</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Despesas Section */}
-                <div className="py-3 border-b border-slate-200">
-                  <div className="flex items-center justify-between text-xs font-black text-slate-800 uppercase mb-2">
-                    <span>Despesas Operacionais do Dia</span>
-                    <span className="text-rose-700 font-mono font-black text-sm">{formatCurrency(totals.totalDespesas)}</span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-1.5 text-xs">
-                    {day.expenses.map((e) => (
-                      <div key={e.id} className="flex items-center justify-between p-1.5 bg-slate-50 rounded border border-slate-100">
-                        <span className="text-slate-600 font-medium text-[11px] truncate">{e.label}:</span>
-                        <span className="font-mono font-bold text-rose-700 text-xs ml-1">
-                          {formatCurrency(e.value || 0)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Sobra Líquida Geral */}
-                <div className="py-2.5 border-b border-slate-200 flex items-center justify-between text-xs bg-slate-50 p-2.5 rounded-lg my-2">
-                  <div>
-                    <span className="font-black text-slate-900 text-xs uppercase block">Sobra Líquida Geral</span>
-                    <span className="text-[10px] text-slate-500">(Total Arrecadado - Total Despesas)</span>
-                  </div>
-                  <span className={`text-base font-black font-mono ${isPositiveLiquida ? 'text-blue-900' : 'text-rose-600'}`}>
-                    {formatCurrency(totals.sobraLiquida)}
-                  </span>
-                </div>
-
-                {/* HIGHLIGHT FINAL: SOBRA REAL EM DINHEIRO EM ESPÉCIE */}
-                <div className="mt-3 p-4 rounded-2xl bg-emerald-700 text-white border-2 border-emerald-800 shadow-xs text-center">
-                  <div className="flex items-center justify-center gap-1.5 mb-1">
-                    <Wallet className="w-5 h-5 text-emerald-200" />
-                    <span className="text-xs uppercase font-black tracking-wider text-emerald-100">
-                      SOBRA REAL EM DINHEIRO (ESPÉCIE NO CAIXA)
-                    </span>
-                  </div>
-                  
-                  <div className="text-2xl sm:text-3xl font-black font-mono tracking-tight my-1 text-white">
-                    {formatCurrency(totals.sobraDinheiroEspecie)}
-                  </div>
-
-                  <div className="text-[11px] font-medium text-emerald-100 bg-emerald-800/90 py-1 px-3 rounded-full inline-block mt-1">
-                    Fórmula: Sobra Líquida ({formatCurrency(totals.sobraLiquida)}) — Total PIX ({formatCurrency(totals.totalPix)})
-                  </div>
-
-                  <p className="text-[10px] sm:text-[11px] text-emerald-100 mt-2 font-medium leading-relaxed">
-                    💵 Este é o valor exato em dinheiro físico (cédulas/moedas) que deve ser entregue na prestação de contas de <strong>{day.dayLabel}</strong>.
-                  </p>
-                </div>
-
-                {/* Ticket Footer Verification */}
-                <div className="mt-4 pt-3 border-t-2 border-dashed border-slate-300 text-center">
-                  <div className="flex items-center justify-center gap-1 text-emerald-800 text-xs font-bold mb-0.5">
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    <span>Fechamento Conferido & Aprovado</span>
-                  </div>
-                  <div className="text-[10px] text-slate-400 font-mono">
-                    Gerado em {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                  </div>
-                </div>
-
+            /* IMAGE VIEW: High-definition, 100% reliable image generated via native Canvas */
+            <div className="max-w-xl mx-auto flex flex-col items-center">
+              <div className="mb-2 text-center">
+                <p className="text-xs font-semibold text-slate-700">
+                  📸 Imagem oficial do fechamento de <strong>{day.dayLabel.toUpperCase()}</strong> ({day.trips.length} viagens):
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Esta é a imagem exata gerada para envio por WhatsApp ou download.
+                </p>
               </div>
 
+              {previewDataUrl ? (
+                <div className="w-full bg-white p-2 rounded-2xl shadow-md border border-slate-200">
+                  <img 
+                    src={previewDataUrl} 
+                    alt={`Comprovante ${day.dayLabel}`} 
+                    className="w-full h-auto rounded-xl object-contain shadow-xs"
+                  />
+                </div>
+              ) : (
+                <div className="py-12 text-center text-sm text-slate-500">
+                  Gerando comprovante em alta definição...
+                </div>
+              )}
+
+              {/* Quick download & share floating bar under image */}
+              <div className="w-full mt-3 flex items-center justify-center gap-3">
+                <button
+                  onClick={handleDownloadImage}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Baixar Imagem PNG</span>
+                </button>
+                <button
+                  onClick={handleShareMobile}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                >
+                  <Share2 className="w-4 h-4" />
+                  <span>Enviar no WhatsApp</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -548,7 +462,7 @@ _(Valor físico em cédulas/moedas que deve estar no caixa)_
         {/* Modal Footer */}
         <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
           <span className="hidden sm:inline">
-            Clique em <strong>Compartilhar no WhatsApp</strong> para enviar diretamente ao proprietário ou responsável financeiro.
+            A imagem mostra todas as viagens, despesas e a <strong>Sobra Real em Dinheiro</strong> calculada.
           </span>
           <button
             onClick={onClose}

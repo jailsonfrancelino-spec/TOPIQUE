@@ -208,7 +208,7 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
                 RESUMO DO FECHAMENTO SEMANAL (SEGUNDA A DOMINGO)
               </h2>
               <p className="text-xs text-blue-200">
-                {sheet.companyRoute} • Veículo / Placa: {sheet.vehiclePlate} • Semana: {formatDatePtBR(sheet.startDate)} a {formatDatePtBR(sheet.endDate)}
+                {sheet.companyRoute} • Semana: {formatDatePtBR(sheet.startDate)} a {formatDatePtBR(sheet.endDate)}
               </p>
             </div>
           </div>

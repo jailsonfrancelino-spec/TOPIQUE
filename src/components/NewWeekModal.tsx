@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { X, Calendar, Car, MapPin, Check } from 'lucide-react';
+import { X, Calendar, MapPin, Check, Info } from 'lucide-react';
 import { formatDateIso, getMonday } from '../utils/storage';
+import { formatDatePtBR } from '../utils/calculations';
 
 interface NewWeekModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (startDate: string, vehiclePlate: string, companyRoute: string) => void;
-  defaultPlate: string;
+  onCreate: (startDate: string, companyRoute: string) => void;
   defaultRoute: string;
 }
 
@@ -14,24 +14,38 @@ export const NewWeekModal: React.FC<NewWeekModalProps> = ({
   isOpen,
   onClose,
   onCreate,
-  defaultPlate,
   defaultRoute,
 }) => {
-  const [startDate, setStartDate] = useState<string>(() => {
-    const nextMonday = getMonday(new Date());
-    return formatDateIso(nextMonday);
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const today = new Date();
+    const monday = getMonday(today);
+    return formatDateIso(monday);
   });
-  const [vehiclePlate, setVehiclePlate] = useState<string>(defaultPlate);
-  const [companyRoute, setCompanyRoute] = useState<string>(defaultRoute);
+  const [companyRoute, setCompanyRoute] = useState<string>(
+    defaultRoute || 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON'
+  );
 
   if (!isOpen) return null;
 
+  // Compute calculated Monday and Sunday for the selected date
+  const parts = selectedDate.split('-').map(Number);
+  const pickedDateObj = (parts.length === 3 && !isNaN(parts[0]))
+    ? new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0)
+    : new Date();
+  
+  const mondayObj = getMonday(pickedDateObj);
+  const sundayObj = new Date(mondayObj);
+  sundayObj.setDate(mondayObj.getDate() + 6);
+
+  const mondayIso = formatDateIso(mondayObj);
+  const sundayIso = formatDateIso(sundayObj);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Always pass the strict Monday ISO date
     onCreate(
-      startDate,
-      vehiclePlate.trim() || 'SEM PLACA',
-      companyRoute.trim() || 'Transporte de Passageiros e Encomendas'
+      mondayIso,
+      companyRoute.trim() || 'TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON'
     );
     onClose();
   };
@@ -50,7 +64,7 @@ export const NewWeekModal: React.FC<NewWeekModalProps> = ({
                 Iniciar Nova Semana
               </h3>
               <p className="text-xs text-slate-500">
-                Cria uma nova ficha de controle de segunda a domingo.
+                Semana sempre começando na Segunda e finalizando no Domingo.
               </p>
             </div>
           </div>
@@ -65,37 +79,34 @@ export const NewWeekModal: React.FC<NewWeekModalProps> = ({
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
-              Data Inicial da Semana (Segunda-feira)
+            <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+              Selecione qualquer dia da semana desejada:
             </label>
             <input
               type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
               required
-              className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 bg-white"
+              className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 bg-white font-semibold text-slate-800 cursor-pointer"
             />
-          </div>
 
-          <div>
-            <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
-              Veículo / Placa
-            </label>
-            <div className="relative">
-              <Car className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-              <input
-                type="text"
-                value={vehiclePlate}
-                onChange={(e) => setVehiclePlate(e.target.value)}
-                placeholder="Ex: MTO-4A82 ou Van 01"
-                required
-                className="w-full text-sm border border-slate-300 rounded-lg pl-9 pr-3 py-2.5 focus:ring-2 focus:ring-blue-500 uppercase bg-white font-medium"
-              />
+            {/* Visual confirmation of the Mon-Sun range */}
+            <div className="mt-2.5 p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-xs space-y-1">
+              <div className="flex items-center gap-1.5 text-blue-900 font-bold">
+                <Info className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                <span>Período da Semana Configurado:</span>
+              </div>
+              <div className="text-slate-700 font-medium pl-5.5">
+                📅 <strong>Segunda-feira:</strong> {formatDatePtBR(mondayIso)}
+              </div>
+              <div className="text-slate-700 font-medium pl-5.5">
+                🏁 <strong>Domingo:</strong> {formatDatePtBR(sundayIso)}
+              </div>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold uppercase text-slate-600 mb-1">
+            <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
               Nome da Linha / Rota
             </label>
             <div className="relative">
@@ -104,7 +115,7 @@ export const NewWeekModal: React.FC<NewWeekModalProps> = ({
                 type="text"
                 value={companyRoute}
                 onChange={(e) => setCompanyRoute(e.target.value)}
-                placeholder="Ex: Transporte de Passageiros e Encomendas — Tianguá x Viçosa"
+                placeholder="Ex: TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON"
                 required
                 className="w-full text-sm border border-slate-300 rounded-lg pl-9 pr-3 py-2.5 focus:ring-2 focus:ring-blue-500 bg-white font-medium"
               />

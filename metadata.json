@@ -1,6 +1,8 @@
 {
-  "name": "Fluxo de Caixa - Transporte",
-  "description": "Sistema de controle diário e semanal de fluxo de caixa para empresas de transporte de passageiros e encomendas.",
+  "name": "TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON",
+  "description": "Sistema de controle diário e semanal de fluxo de caixa para transporte de passageiros e encomendas entre Tianguá e Viçosa do Ceará - Jailson.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

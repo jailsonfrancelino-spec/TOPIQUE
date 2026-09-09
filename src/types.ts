@@ -29,9 +29,9 @@ export interface DayRecord {
 
 export interface WeeklySheet {
   id: string;
-  companyRoute: string; // e.g. "Transporte de Passageiros e Encomendas — Tianguá x Viçosa"
-  vehiclePlate: string; // e.g. "BRA-2026"
-  vehicleModel?: string; // e.g. "Van Sprinter 515 / Ônibus 102"
+  companyRoute: string; // e.g. "TRANSPORTE DE PASSAGEIROS - TIANGUA X VICOSA / JAILSON"
+  vehiclePlate?: string; // Optional (not needed per user request)
+  vehicleModel?: string;
   weekNumber?: number;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD

@@ -140,7 +140,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </div>
 
                     <p className="text-xs text-slate-600 mt-0.5">
-                      {sheet.companyRoute} • Veículo: <strong className="text-slate-800 uppercase">{sheet.vehiclePlate}</strong>
+                      {sheet.companyRoute}
                     </p>
 
                     <div className="flex items-center gap-4 mt-2 text-xs">
