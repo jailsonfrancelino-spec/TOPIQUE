@@ -15,11 +15,17 @@ import {
   Calendar,
   Share2,
   MessageSquare,
-  Banknote
+  Banknote,
+  FileText,
+  Image as ImageIcon,
+  Check
 } from 'lucide-react';
 import { DayRecord, WeeklySheet } from '../types';
 import { calculateWeeklyTotals, formatCurrency, formatDatePtBR } from '../utils/calculations';
 import { CashPrintModal } from './CashPrintModal';
+import { WeeklyPrintModal } from './WeeklyPrintModal';
+import { downloadWeeklySummaryPdf } from '../utils/weeklyPdf';
+import { generateWeeklySummaryCanvas } from '../utils/weeklyCanvas';
 
 interface WeeklySummaryProps {
   sheet: WeeklySheet;
@@ -35,7 +41,52 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
   onNavigateToDay,
 }) => {
   const [printModalDay, setPrintModalDay] = useState<{ day: DayRecord; idx: number } | null>(null);
+  const [isWeeklyModalOpen, setIsWeeklyModalOpen] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isDownloadingImage, setIsDownloadingImage] = useState(false);
+  const [actionToast, setActionToast] = useState<string | null>(null);
+
   const weekly = calculateWeeklyTotals(sheet);
+
+  const handleDownloadPdf = () => {
+    try {
+      setIsDownloadingPdf(true);
+      downloadWeeklySummaryPdf(sheet);
+      setActionToast('Resumo Semanal em PDF baixado com sucesso!');
+      setTimeout(() => setActionToast(null), 3500);
+    } catch (err) {
+      console.error('Erro ao baixar PDF semanal:', err);
+      alert('Houve um erro ao gerar o PDF. Você pode visualizar e baixar no botão WhatsApp/Comprovante.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadImage = () => {
+    try {
+      setIsDownloadingImage(true);
+      const canvas = generateWeeklySummaryCanvas(sheet);
+      const dataUrl = canvas.toDataURL('image/png');
+      const safeStart = sheet.startDate.replace(/[^a-zA-Z0-9]/g, '-');
+      const safeEnd = sheet.endDate.replace(/[^a-zA-Z0-9]/g, '-');
+      const filename = `Resumo_Semanal_${safeStart}_a_${safeEnd}.png`;
+
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setActionToast('Imagem do Resumo Semanal baixada com sucesso!');
+      setTimeout(() => setActionToast(null), 3500);
+    } catch (err) {
+      console.error('Erro ao baixar imagem semanal:', err);
+      alert('Houve um erro ao baixar a imagem.');
+    } finally {
+      setIsDownloadingImage(false);
+    }
+  };
 
   const pixPercentage = weekly.totalArrecadacao > 0
     ? (weekly.totalPix / weekly.totalArrecadacao) * 100
@@ -50,6 +101,63 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
 
   return (
     <div className="space-y-6">
+
+      {/* Action Toast Feedback */}
+      {actionToast && (
+        <div className="bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-center text-xs font-bold flex items-center justify-center gap-2 shadow-sm animate-in fade-in duration-150">
+          <Check className="w-4 h-4" />
+          <span>{actionToast}</span>
+        </div>
+      )}
+
+      {/* Executive Quick Download & Share Bar */}
+      <div className="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-2xl p-4 sm:p-5 text-white shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-blue-800">
+        <div>
+          <span className="text-[10px] font-black uppercase tracking-wider bg-blue-700/80 text-blue-200 px-2.5 py-1 rounded-md">
+            EXPORTAÇÃO OFICIAL DO FECHAMENTO SEMANAL
+          </span>
+          <h3 className="text-base sm:text-lg font-bold text-white mt-1">
+            Baixar Comprovante Consolidado da Semana
+          </h3>
+          <p className="text-xs text-blue-200 mt-0.5">
+            Semana completa de {formatDatePtBR(sheet.startDate)} a {formatDatePtBR(sheet.endDate)} pronta para envio e arquivamento
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5 flex-wrap w-full sm:w-auto">
+          {/* Main PDF Download Button */}
+          <button
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-black text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-sm transition-all cursor-pointer min-h-[42px] disabled:opacity-50"
+            title="Baixar Resumo Semanal em documento PDF (formato A4 oficial)"
+          >
+            <FileText className="w-4 h-4 text-red-200" />
+            <span>{isDownloadingPdf ? 'Gerando PDF...' : 'Baixar em PDF'}</span>
+          </button>
+
+          {/* Download Image Button */}
+          <button
+            onClick={handleDownloadImage}
+            disabled={isDownloadingImage}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 active:bg-white/30 text-white border border-white/20 font-bold text-xs sm:text-sm px-3.5 py-2.5 rounded-xl transition-all cursor-pointer min-h-[42px] disabled:opacity-50"
+            title="Baixar Resumo Semanal em formato de imagem PNG em alta resolução"
+          >
+            <Download className="w-4 h-4 text-blue-200" />
+            <span>{isDownloadingImage ? 'Baixando...' : 'Baixar Imagem (PNG)'}</span>
+          </button>
+
+          {/* WhatsApp & Preview Modal */}
+          <button
+            onClick={() => setIsWeeklyModalOpen(true)}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-sm transition-all cursor-pointer min-h-[42px]"
+            title="Abrir visualização completa, copiar imagem e compartilhar no WhatsApp"
+          >
+            <Share2 className="w-4 h-4" />
+            <span>Enviar no WhatsApp</span>
+          </button>
+        </div>
+      </div>
       
       {/* Top Executive KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -213,20 +321,46 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleDownloadPdf}
+              disabled={isDownloadingPdf}
+              className="inline-flex items-center gap-1.5 text-xs font-bold bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              title="Baixar Resumo Semanal em documento PDF oficial"
+            >
+              <FileText className="w-3.5 h-3.5 text-red-200" />
+              <span>{isDownloadingPdf ? 'Gerando...' : 'Baixar em PDF'}</span>
+            </button>
+            <button
+              onClick={handleDownloadImage}
+              disabled={isDownloadingImage}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+              title="Baixar Resumo Semanal em formato de imagem PNG"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Baixar Imagem</span>
+            </button>
+            <button
+              onClick={() => setIsWeeklyModalOpen(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors cursor-pointer shadow-xs"
+              title="Visualizar e Enviar Resumo no WhatsApp"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>WhatsApp</span>
+            </button>
             <button
               onClick={onPrint}
               className="inline-flex items-center gap-1.5 text-xs font-semibold bg-blue-800 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg border border-blue-700 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Imprimir Resumo</span>
+              <span>Imprimir</span>
             </button>
             <button
               onClick={onExportCsv}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Exportar Excel</span>
+              <span>Excel</span>
             </button>
           </div>
         </div>
@@ -498,6 +632,15 @@ export const WeeklySummary: React.FC<WeeklySummaryProps> = ({
           sheet={sheet}
           day={printModalDay.day}
           dayIndex={printModalDay.idx}
+        />
+      )}
+
+      {/* Weekly Consolidated Print & Share Modal */}
+      {isWeeklyModalOpen && (
+        <WeeklyPrintModal
+          isOpen={isWeeklyModalOpen}
+          onClose={() => setIsWeeklyModalOpen(false)}
+          sheet={sheet}
         />
       )}
 
