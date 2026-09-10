@@ -7,11 +7,12 @@ import {
   AlertCircle, 
   Eye, 
   EyeOff,
-  Check
+  Smartphone,
+  CheckCircle2
 } from 'lucide-react';
 
 interface LoginScreenProps {
-  onLogin: (username: string, password: string, rememberMe: boolean) => boolean;
+  onLogin: (username: string, password: string, rememberMe: boolean) => Promise<boolean> | boolean;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
@@ -23,7 +24,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -37,14 +38,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
     setIsLoading(true);
 
-    // Permite que o formulário acione o evento de envio para o gerenciador de senhas do navegador / Google
-    setTimeout(() => {
-      const success = onLogin(cleanUsername, cleanPassword, rememberMe);
+    try {
+      const success = await onLogin(cleanUsername, cleanPassword, rememberMe);
       if (!success) {
-        setErrorMsg('Nome de usuário ou senha incorretos. Verifique os dados e tente novamente.');
+        setErrorMsg('Nome de usuário ou senha incorretos. Verifique os dados digitados e tente novamente.');
         setIsLoading(false);
       }
-    }, 250);
+    } catch (err) {
+      setErrorMsg('Falha ao conectar com o banco de dados. Verifique a internet do aparelho e tente novamente.');
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -188,9 +191,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
           </form>
 
           {/* Rodapé explicativo discreto */}
-          <div className="mt-6 pt-4 border-t border-slate-200 text-center">
+          <div className="mt-5 pt-3.5 border-t border-slate-200 text-center space-y-2">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-900 text-[11px] font-bold">
+              <Smartphone className="w-3.5 h-3.5 text-blue-700 shrink-0" />
+              <span>Acesso liberado em múltiplos celulares simultaneamente</span>
+            </div>
             <p className="text-[11px] text-slate-500 font-medium">
-              Acesso disponível para Administrador e Motoristas autorizados.
+              Você pode acessar o mesmo login em vários aparelhos ao mesmo tempo sem desconectar.
             </p>
           </div>
 

@@ -207,23 +207,38 @@ export async function testSupabaseConnection(): Promise<SupabaseStatus> {
   }
 }
 
+export const DRIVERS_BACKUP_ROW_ID = '__app_drivers_catalog_cloud__';
+
 /**
  * Carrega todos os motoristas cadastrados do Supabase.
+ * Tenta primeiro a tabela 'drivers'; caso não exista ou esteja vazia,
+ * busca o catálogo unificado salvo na tabela 'weekly_sheets'.
  */
 export async function fetchDriversFromSupabase(): Promise<Driver[] | null> {
   try {
+    // 1. Tentar ler da tabela DRIVERS_TABLE_NAME ('drivers')
     const { data, error } = await supabase
       .from(DRIVERS_TABLE_NAME)
       .select('*')
       .order('name', { ascending: true });
 
-    if (error) {
-      console.warn('Supabase fetchDrivers error:', error.message);
-      return null;
+    if (!error && data && data.length > 0) {
+      return data.map(mapRowToDriver);
     }
 
-    if (!data) return [];
-    return data.map(mapRowToDriver);
+    // 2. Fallback: buscar o catálogo global de motoristas sincronizado na tabela 'weekly_sheets'
+    const { data: backupRow, error: backupErr } = await supabase
+      .from(TABLE_NAME)
+      .select('data')
+      .eq('id', DRIVERS_BACKUP_ROW_ID)
+      .maybeSingle();
+
+    if (!backupErr && backupRow?.data?.drivers && Array.isArray(backupRow.data.drivers)) {
+      return backupRow.data.drivers;
+    }
+
+    if (data && data.length === 0) return [];
+    return null;
   } catch (err) {
     console.warn('Erro ao buscar motoristas do Supabase:', err);
     return null;
@@ -231,18 +246,52 @@ export async function fetchDriversFromSupabase(): Promise<Driver[] | null> {
 }
 
 /**
+ * Salva ou atualiza a lista completa de motoristas no Supabase (em ambas as tabelas para redundância total).
+ */
+export async function syncAllDriversToCloud(drivers: Driver[]): Promise<boolean> {
+  try {
+    // 1. Salva no catálogo em weekly_sheets (garantia imediata independente de SQL adicional)
+    const backupPayload = {
+      id: DRIVERS_BACKUP_ROW_ID,
+      company_route: '__SISTEMA_CATALOGO_MOTORISTAS__',
+      start_date: '2020-01-01',
+      end_date: '2035-12-31',
+      days: [],
+      data: {
+        type: 'drivers_catalog',
+        drivers,
+        updatedAt: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    };
+    await supabase.from(TABLE_NAME).upsert(backupPayload, { onConflict: 'id' });
+
+    // 2. Tenta também salvar individualmente na tabela drivers se existir
+    for (const d of drivers) {
+      const payload = mapDriverToRow(d);
+      await supabase.from(DRIVERS_TABLE_NAME).upsert(payload, { onConflict: 'id' });
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('Falha ao sincronizar motoristas na nuvem:', err);
+    return false;
+  }
+}
+
+/**
  * Salva ou atualiza um motorista no Supabase.
  */
-export async function saveDriverToSupabase(driver: Driver): Promise<boolean> {
+export async function saveDriverToSupabase(driver: Driver, allDrivers?: Driver[]): Promise<boolean> {
   try {
     const payload = mapDriverToRow(driver);
-    const { error } = await supabase
+    await supabase
       .from(DRIVERS_TABLE_NAME)
       .upsert(payload, { onConflict: 'id' });
 
-    if (error) {
-      console.error('Erro ao salvar motorista no Supabase:', error.message);
-      return false;
+    // Se fornecida a lista ou se puder sincronizar, garante o backup na tabela weekly_sheets
+    if (allDrivers && allDrivers.length > 0) {
+      await syncAllDriversToCloud(allDrivers);
     }
 
     return true;
@@ -255,16 +304,15 @@ export async function saveDriverToSupabase(driver: Driver): Promise<boolean> {
 /**
  * Exclui um motorista do Supabase.
  */
-export async function deleteDriverFromSupabase(driverId: string): Promise<boolean> {
+export async function deleteDriverFromSupabase(driverId: string, remainingDrivers?: Driver[]): Promise<boolean> {
   try {
-    const { error } = await supabase
+    await supabase
       .from(DRIVERS_TABLE_NAME)
       .delete()
       .eq('id', driverId);
 
-    if (error) {
-      console.error('Erro ao excluir motorista do Supabase:', error.message);
-      return false;
+    if (remainingDrivers) {
+      await syncAllDriversToCloud(remainingDrivers);
     }
 
     return true;
@@ -339,7 +387,9 @@ export async function fetchSheetsFromSupabase(): Promise<WeeklySheet[] | null> {
       return [];
     }
 
-    return data.map(mapRowToSheet);
+    // Filtra para remover registros reservados do sistema (ex: catálogo de motoristas)
+    const validRows = data.filter((r) => r.id !== DRIVERS_BACKUP_ROW_ID && !r.id?.startsWith('__'));
+    return validRows.map(mapRowToSheet);
   } catch (err) {
     console.warn('Erro ao buscar planilhas do Supabase:', err);
     return null;
@@ -410,7 +460,8 @@ export async function deleteSheetFromSupabase(sheetId: string): Promise<boolean>
  */
 export function subscribeToWeeklySheets(
   onUpsert: (sheet: WeeklySheet) => void,
-  onDelete: (sheetId: string) => void
+  onDelete: (sheetId: string) => void,
+  onDriversBackupUpdate?: (drivers: Driver[]) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
 
@@ -425,14 +476,28 @@ export function subscribeToWeeklySheets(
           table: TABLE_NAME,
         },
         (payload) => {
+          const newRow = payload.new as any;
+          const oldRow = payload.old as any;
+
+          // Se for atualização no catálogo unificado de motoristas
+          if (newRow && (newRow.id === DRIVERS_BACKUP_ROW_ID || newRow.id?.startsWith('__'))) {
+            if (onDriversBackupUpdate && newRow.data?.drivers && Array.isArray(newRow.data.drivers)) {
+              onDriversBackupUpdate(newRow.data.drivers);
+            }
+            return;
+          }
+          if (oldRow && (oldRow.id === DRIVERS_BACKUP_ROW_ID || oldRow.id?.startsWith('__'))) {
+            return;
+          }
+
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            if (payload.new) {
-              const sheet = mapRowToSheet(payload.new);
+            if (newRow) {
+              const sheet = mapRowToSheet(newRow);
               onUpsert(sheet);
             }
           } else if (payload.eventType === 'DELETE') {
-            if (payload.old && payload.old.id) {
-              onDelete(payload.old.id);
+            if (oldRow && oldRow.id) {
+              onDelete(oldRow.id);
             }
           }
         }

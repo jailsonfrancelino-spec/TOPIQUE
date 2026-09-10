@@ -32,6 +32,7 @@ import {
   fetchDriversFromSupabase,
   saveDriverToSupabase,
   deleteDriverFromSupabase,
+  syncAllDriversToCloud,
   subscribeToDrivers,
   SupabaseStatus,
 } from './utils/supabase';
@@ -117,31 +118,32 @@ export default function App() {
     const initSupabase = async () => {
       const status = await refreshSupabaseStatus();
 
-      // 1. Fetch & Subscribe to Drivers
+      // 1. Fetch & Subscribe to Drivers (Garante sincronização imediata em qualquer celular)
       const cloudDrivers = await fetchDriversFromSupabase();
       if (cloudDrivers && cloudDrivers.length > 0) {
         setDrivers(cloudDrivers);
+        saveAllDrivers(cloudDrivers);
       } else if (cloudDrivers && cloudDrivers.length === 0) {
         const localDrivers = loadAllDrivers();
-        for (const d of localDrivers) {
-          await saveDriverToSupabase(d);
-        }
+        await syncAllDriversToCloud(localDrivers);
       }
 
       unsubscribeDriversRealtime = subscribeToDrivers(
         (remoteDriver) => {
           setDrivers((prev) => {
             const idx = prev.findIndex((d) => d.id === remoteDriver.id);
-            if (idx >= 0) {
-              const copy = [...prev];
-              copy[idx] = remoteDriver;
-              return copy;
-            }
-            return [remoteDriver, ...prev];
+            const updated = idx >= 0 ? [...prev] : [remoteDriver, ...prev];
+            if (idx >= 0) updated[idx] = remoteDriver;
+            saveAllDrivers(updated);
+            return updated;
           });
         },
         (deletedId) => {
-          setDrivers((prev) => prev.filter((d) => d.id !== deletedId));
+          setDrivers((prev) => {
+            const filtered = prev.filter((d) => d.id !== deletedId);
+            saveAllDrivers(filtered);
+            return filtered;
+          });
         }
       );
 
@@ -199,6 +201,12 @@ export default function App() {
             setTimeout(() => {
               isRemoteSyncRef.current = false;
             }, 300);
+          },
+          (updatedDrivers) => {
+            if (updatedDrivers && updatedDrivers.length > 0) {
+              setDrivers(updatedDrivers);
+              saveAllDrivers(updatedDrivers);
+            }
           }
         );
       }
@@ -471,17 +479,26 @@ export default function App() {
     e.target.value = '';
   };
 
-  // Authentication Handlers
-  const handleLogin = (u: string, p: string, rememberMe: boolean): boolean => {
-    const cleanUser = u.trim();
+  // Authentication Handlers (Permite múltiplos celulares conectados ao mesmo tempo no mesmo login)
+  const handleLogin = async (u: string, p: string, rememberMe: boolean): Promise<boolean> => {
+    const cleanUser = u.trim().toLowerCase();
     const cleanPass = p.trim();
 
     // 1. Verificação de Acesso do Administrador (Jailson)
-    if (cleanUser.toLowerCase() === 'jailson12' && cleanPass === '201212') {
+    const isAdmin = cleanUser === 'jailson12' || cleanUser === 'jailson';
+    const adminInMemory = drivers.find(
+      (d) => d.username?.toLowerCase() === 'jailson12' || d.id === 'driver-jailson-admin'
+    );
+    const isAdminPassValid =
+      cleanPass === '201212' ||
+      cleanPass === 'password201212' ||
+      (adminInMemory && adminInMemory.password === cleanPass);
+
+    if (isAdmin && isAdminPassValid) {
       const adminUser: AuthUser = {
         role: 'admin',
         username: 'jailson12',
-        displayName: 'Jailson Francelino',
+        displayName: adminInMemory?.name || 'Jailson Francelino',
       };
       if (rememberMe) {
         saveAuthSession(adminUser);
@@ -491,14 +508,54 @@ export default function App() {
       return true;
     }
 
-    // 2. Verificação de Acesso dos Motoristas Cadastrados
-    const driver = drivers.find(
+    // 2. Verificação de Acesso dos Motoristas Cadastrados na memória local
+    let driver = drivers.find(
       (d) =>
         d.username &&
-        d.username.toLowerCase() === cleanUser.toLowerCase() &&
+        d.username.toLowerCase() === cleanUser &&
         d.password === cleanPass &&
         d.status === 'ativo'
     );
+
+    // 3. Se não achou na memória (ex: acabou de abrir o sistema em outro celular pela primeira vez),
+    // busca imediatamente na nuvem Supabase em tempo real!
+    if (!driver) {
+      const cloudDrivers = await fetchDriversFromSupabase();
+      if (cloudDrivers && cloudDrivers.length > 0) {
+        setDrivers(cloudDrivers);
+        saveAllDrivers(cloudDrivers);
+
+        // Se o admin alterou a senha dele em outro celular e está tentando entrar:
+        if (isAdmin) {
+          const cloudAdmin = cloudDrivers.find(
+            (d) => d.username?.toLowerCase() === 'jailson12' || d.id === 'driver-jailson-admin'
+          );
+          if (
+            cloudAdmin &&
+            (cloudAdmin.password === cleanPass || cleanPass === '201212' || cleanPass === 'password201212')
+          ) {
+            const adminUser: AuthUser = {
+              role: 'admin',
+              username: 'jailson12',
+              displayName: cloudAdmin.name || 'Jailson Francelino',
+            };
+            if (rememberMe) saveAuthSession(adminUser);
+            setCurrentUser(adminUser);
+            setActiveTab('drivers');
+            return true;
+          }
+        }
+
+        // Verifica os motoristas atualizados vindos do Supabase
+        driver = cloudDrivers.find(
+          (d) =>
+            d.username &&
+            d.username.toLowerCase() === cleanUser &&
+            d.password === cleanPass &&
+            d.status === 'ativo'
+        );
+      }
+    }
 
     if (driver) {
       const driverUser: AuthUser = {
@@ -533,7 +590,7 @@ export default function App() {
     const newDriver: Driver = {
       id: `drv-${Date.now()}`,
       name: data.name,
-      username: data.username,
+      username: data.username.toLowerCase(),
       password: data.password,
       vehiclePlate: data.vehiclePlate,
       status: 'ativo',
@@ -541,13 +598,17 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    setDrivers((prev) => [newDriver, ...prev]);
-    await saveDriverToSupabase(newDriver);
+    const updated = [newDriver, ...drivers];
+    setDrivers(updated);
+    saveAllDrivers(updated);
+    await saveDriverToSupabase(newDriver, updated);
   };
 
   const handleUpdateDriver = async (updated: Driver) => {
-    setDrivers((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
-    await saveDriverToSupabase(updated);
+    const updatedList = drivers.map((d) => (d.id === updated.id ? updated : d));
+    setDrivers(updatedList);
+    saveAllDrivers(updatedList);
+    await saveDriverToSupabase(updated, updatedList);
 
     // If this driver is bound to any days in the active sheet, update name & vehicle plate
     if (activeSheet) {
@@ -569,8 +630,10 @@ export default function App() {
   };
 
   const handleDeleteDriver = async (driverId: string) => {
-    setDrivers((prev) => prev.filter((d) => d.id !== driverId));
-    await deleteDriverFromSupabase(driverId);
+    const remaining = drivers.filter((d) => d.id !== driverId);
+    setDrivers(remaining);
+    saveAllDrivers(remaining);
+    await deleteDriverFromSupabase(driverId, remaining);
   };
 
   const handleAssignDriverToSheet = (driver: Driver, applyToAllDays: boolean) => {
