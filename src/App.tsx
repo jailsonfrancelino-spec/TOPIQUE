@@ -112,14 +112,18 @@ export default function App() {
   }, [drivers]);
 
   useEffect(() => {
+    let isMounted = true;
     let unsubscribeRealtime: (() => void) | null = null;
     let unsubscribeDriversRealtime: (() => void) | null = null;
 
     const initSupabase = async () => {
       const status = await refreshSupabaseStatus();
+      if (!isMounted) return;
 
       // 1. Fetch & Subscribe to Drivers (Garante sincronização imediata em qualquer celular)
       const cloudDrivers = await fetchDriversFromSupabase();
+      if (!isMounted) return;
+
       if (cloudDrivers && cloudDrivers.length > 0) {
         setDrivers(cloudDrivers);
         saveAllDrivers(cloudDrivers);
@@ -127,6 +131,8 @@ export default function App() {
         const localDrivers = loadAllDrivers();
         await syncAllDriversToCloud(localDrivers);
       }
+
+      if (!isMounted) return;
 
       unsubscribeDriversRealtime = subscribeToDrivers(
         (remoteDriver) => {
@@ -151,6 +157,8 @@ export default function App() {
       if (status.tableExists) {
         // Fetch sheets from Supabase
         const cloudSheets = await fetchSheetsFromSupabase();
+        if (!isMounted) return;
+
         if (cloudSheets && cloudSheets.length > 0) {
           isRemoteSyncRef.current = true;
           setSheets(cloudSheets);
@@ -174,6 +182,8 @@ export default function App() {
             setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
           }
         }
+
+        if (!isMounted) return;
 
         // Subscribe to Realtime changes across any device or browser tab
         unsubscribeRealtime = subscribeToWeeklySheets(
@@ -215,6 +225,7 @@ export default function App() {
     initSupabase();
 
     return () => {
+      isMounted = false;
       if (unsubscribeRealtime) {
         unsubscribeRealtime();
       }

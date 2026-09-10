@@ -1,10 +1,26 @@
 import { createClient, RealtimeChannel } from '@supabase/supabase-js';
 import { WeeklySheet, Driver } from '../types';
 
+// 1. Obter variáveis de ambiente exatamente conforme definido pelo Vite usando import.meta.env
+const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const rawSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Função de normalização para evitar erros comuns de digitação (espaços, aspas ou erros de caixa)
+function normalizeApiKey(key?: string): string {
+  if (!key) return 'sb_publishable_lBpEEfa34UJGoZURzh-qfQ_6J9hDLZw';
+  const clean = key.trim().replace(/^['"]|['"]$/g, '');
+  // Corrige erro de digitação comum ('F' maiúsculo em vez de 'f' minúsculo)
+  if (clean === 'sb_publishable_lBpEEFa34UJGoZURzh-qfQ_6J9hDLZw') {
+    return 'sb_publishable_lBpEEfa34UJGoZURzh-qfQ_6J9hDLZw';
+  }
+  return clean;
+}
+
 export const SUPABASE_URL = 
-  import.meta.env.VITE_SUPABASE_URL || 'https://rwjebkvhijnygwwczdjk.supabase.co';
-export const SUPABASE_ANON_KEY = 
-  import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_lBpEEfa34UJGoZURzh-qfQ_6J9hDLZw';
+  (rawSupabaseUrl ? rawSupabaseUrl.trim().replace(/^['"]|['"]$/g, '') : '') || 
+  'https://rwjebkvhijnygwwczdjk.supabase.co';
+
+export const SUPABASE_ANON_KEY = normalizeApiKey(rawSupabaseAnonKey);
 
 export const TABLE_NAME = 'weekly_sheets';
 export const DRIVERS_TABLE_NAME = 'drivers';
@@ -189,10 +205,18 @@ export async function testSupabaseConnection(): Promise<SupabaseStatus> {
       driversError.code === '42P01'
     );
 
+    const isAuthError = sheetsError && (
+      sheetsError.message?.toLowerCase().includes('api key') ||
+      sheetsError.message?.toLowerCase().includes('apikey') ||
+      sheetsError.message?.toLowerCase().includes('jwt') ||
+      (sheetsError as any).status === 401 ||
+      (sheetsError as any).status === 403
+    );
+
     return {
-      connected: true,
-      tableExists: !isSheetsMissing,
-      driversTableExists: !isDriversMissing,
+      connected: !isAuthError && (!sheetsError || isSheetsMissing),
+      tableExists: !isSheetsMissing && !isAuthError,
+      driversTableExists: !isDriversMissing && !isAuthError,
       lastChecked: new Date().toLocaleTimeString('pt-BR'),
       errorMessage: sheetsError ? sheetsError.message : undefined,
     };
@@ -324,6 +348,7 @@ export async function deleteDriverFromSupabase(driverId: string, remainingDriver
 
 /**
  * Assina atualizações em tempo real (Supabase Realtime) na tabela drivers.
+ * Os callbacks .on('postgres_changes', ...) são adicionados estritamente ANTES de chamar o .subscribe().
  */
 export function subscribeToDrivers(
   onUpsert: (driver: Driver) => void,
@@ -332,31 +357,41 @@ export function subscribeToDrivers(
   let channel: RealtimeChannel | null = null;
 
   try {
-    channel = supabase
-      .channel('public:drivers_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: DRIVERS_TABLE_NAME,
-        },
-        (payload) => {
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            if (payload.new) {
-              const driver = mapRowToDriver(payload.new);
-              onUpsert(driver);
-            }
-          } else if (payload.eventType === 'DELETE') {
-            if (payload.old && payload.old.id) {
-              onDelete(payload.old.id);
-            }
+    // 1. Cria um canal com identificador único para evitar conflito com canais já subscritos
+    const uniqueChannelName = `drivers_changes_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const newChannel = supabase.channel(uniqueChannelName);
+
+    // 2. Adiciona os callbacks (.on('postgres_changes', ...)) ANTES de chamar o .subscribe()
+    newChannel.on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: DRIVERS_TABLE_NAME,
+      },
+      (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          if (payload.new) {
+            const driver = mapRowToDriver(payload.new);
+            onUpsert(driver);
+          }
+        } else if (payload.eventType === 'DELETE') {
+          if (payload.old && payload.old.id) {
+            onDelete(payload.old.id);
           }
         }
-      )
-      .subscribe((status) => {
-        console.log(`Supabase Realtime Status (${DRIVERS_TABLE_NAME}):`, status);
-      });
+      }
+    );
+
+    // 3. Chama .subscribe() estritamente DEPOIS de registrar os callbacks .on()
+    newChannel.subscribe((status, err) => {
+      console.log(`Supabase Realtime Status (${DRIVERS_TABLE_NAME}):`, status);
+      if (err) {
+        console.warn(`Aviso de Realtime em (${DRIVERS_TABLE_NAME}):`, err);
+      }
+    });
+
+    channel = newChannel;
   } catch (err) {
     console.error('Erro ao inicializar Supabase Realtime para drivers:', err);
   }
@@ -457,6 +492,7 @@ export async function deleteSheetFromSupabase(sheetId: string): Promise<boolean>
 /**
  * Assina atualizações em tempo real (Supabase Realtime) na tabela weekly_sheets.
  * Notifica callback quando outra aba, dispositivo ou usuário alterar os dados.
+ * Os callbacks .on('postgres_changes', ...) são adicionados estritamente ANTES de chamar o .subscribe().
  */
 export function subscribeToWeeklySheets(
   onUpsert: (sheet: WeeklySheet) => void,
@@ -466,47 +502,57 @@ export function subscribeToWeeklySheets(
   let channel: RealtimeChannel | null = null;
 
   try {
-    channel = supabase
-      .channel('public:weekly_sheets_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: TABLE_NAME,
-        },
-        (payload) => {
-          const newRow = payload.new as any;
-          const oldRow = payload.old as any;
+    // 1. Cria um canal com identificador único para evitar conflito com canais já subscritos
+    const uniqueChannelName = `weekly_sheets_changes_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const newChannel = supabase.channel(uniqueChannelName);
 
-          // Se for atualização no catálogo unificado de motoristas
-          if (newRow && (newRow.id === DRIVERS_BACKUP_ROW_ID || newRow.id?.startsWith('__'))) {
-            if (onDriversBackupUpdate && newRow.data?.drivers && Array.isArray(newRow.data.drivers)) {
-              onDriversBackupUpdate(newRow.data.drivers);
-            }
-            return;
-          }
-          if (oldRow && (oldRow.id === DRIVERS_BACKUP_ROW_ID || oldRow.id?.startsWith('__'))) {
-            return;
-          }
+    // 2. Adiciona os callbacks (.on('postgres_changes', ...)) ANTES de chamar o .subscribe()
+    newChannel.on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: TABLE_NAME,
+      },
+      (payload) => {
+        const newRow = payload.new as any;
+        const oldRow = payload.old as any;
 
-          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-            if (newRow) {
-              const sheet = mapRowToSheet(newRow);
-              onUpsert(sheet);
-            }
-          } else if (payload.eventType === 'DELETE') {
-            if (oldRow && oldRow.id) {
-              onDelete(oldRow.id);
-            }
+        // Se for atualização no catálogo unificado de motoristas
+        if (newRow && (newRow.id === DRIVERS_BACKUP_ROW_ID || newRow.id?.startsWith('__'))) {
+          if (onDriversBackupUpdate && newRow.data?.drivers && Array.isArray(newRow.data.drivers)) {
+            onDriversBackupUpdate(newRow.data.drivers);
+          }
+          return;
+        }
+        if (oldRow && (oldRow.id === DRIVERS_BACKUP_ROW_ID || oldRow.id?.startsWith('__'))) {
+          return;
+        }
+
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          if (newRow) {
+            const sheet = mapRowToSheet(newRow);
+            onUpsert(sheet);
+          }
+        } else if (payload.eventType === 'DELETE') {
+          if (oldRow && oldRow.id) {
+            onDelete(oldRow.id);
           }
         }
-      )
-      .subscribe((status) => {
-        console.log(`Supabase Realtime Status (${TABLE_NAME}):`, status);
-      });
+      }
+    );
+
+    // 3. Chama .subscribe() estritamente DEPOIS de registrar os callbacks .on()
+    newChannel.subscribe((status, err) => {
+      console.log(`Supabase Realtime Status (${TABLE_NAME}):`, status);
+      if (err) {
+        console.warn(`Aviso de Realtime em (${TABLE_NAME}):`, err);
+      }
+    });
+
+    channel = newChannel;
   } catch (err) {
-    console.error('Erro ao inicializar Supabase Realtime:', err);
+    console.error('Erro ao inicializar Supabase Realtime para planilhas:', err);
   }
 
   return () => {
