@@ -18,14 +18,24 @@ import {
   Eye,
   EyeOff,
   Copy,
-  Check
+  Check,
+  Wallet,
+  Camera,
+  Receipt,
+  DollarSign,
+  ArrowUpRight,
+  ArrowDownRight,
+  FileText
 } from 'lucide-react';
 import { Driver, WeeklySheet } from '../types';
 import { SupabaseStatus } from '../utils/supabase';
+import { formatCurrency } from '../utils/calculations';
+import { DriverCashAuditModal } from './DriverCashAuditModal';
 
 interface DriversManagerProps {
   drivers: Driver[];
   activeSheet: WeeklySheet;
+  allSheets?: WeeklySheet[];
   onAddDriver: (data: {
     name: string;
     username: string;
@@ -36,6 +46,7 @@ interface DriversManagerProps {
   onDeleteDriver: (driverId: string) => Promise<void>;
   onAssignDriverToSheet: (driver: Driver, applyToAllDays: boolean) => void;
   onNavigateToDailySheet: (driverId?: string) => void;
+  onOpenDayInEditor?: (sheetId: string, dayIndex: number) => void;
   supabaseStatus: SupabaseStatus;
   onOpenSupabaseModal: () => void;
 }
@@ -43,17 +54,23 @@ interface DriversManagerProps {
 export const DriversManager: React.FC<DriversManagerProps> = ({
   drivers,
   activeSheet,
+  allSheets = [],
   onAddDriver,
   onUpdateDriver,
   onDeleteDriver,
   onAssignDriverToSheet,
   onNavigateToDailySheet,
+  onOpenDayInEditor,
   supabaseStatus,
   onOpenSupabaseModal,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
+
+  // Modo de visualização: 'logins' (gerenciamento de senhas) ou 'caixas' (auditoria de caixas e fotos)
+  const [activeTabMode, setActiveTabMode] = useState<'logins' | 'caixas'>('logins');
+  const [selectedAuditDriver, setSelectedAuditDriver] = useState<Driver | null>(null);
 
   // Form State simplificado: Focado em Nome, Login e Senha
   const [name, setName] = useState('');
@@ -64,6 +81,52 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
   const [showPasswordInModal, setShowPasswordInModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Calcula estatísticas financeiras e de fotos de um motorista na semana ativa
+  const getDriverStats = (driver: Driver) => {
+    let arrecadado = 0;
+    let despesas = 0;
+    let pix = 0;
+    let fotosCount = 0;
+    let diasCount = 0;
+    let viagensCount = 0;
+
+    activeSheet.days.forEach((day) => {
+      const isDriverDay =
+        day.driverId === driver.id ||
+        (day.driverName && day.driverName.toLowerCase().includes(driver.name.toLowerCase())) ||
+        day.trips.some((t) => t.driverId === driver.id);
+
+      if (isDriverDay) {
+        diasCount++;
+        day.trips.forEach((t) => {
+          const sub = (Number(t.ida) || 0) + (Number(t.volta) || 0) + (Number(t.encom) || 0);
+          arrecadado += sub;
+          pix += Number(t.pix) || 0;
+          if (sub > 0) viagensCount++;
+        });
+
+        day.expenses.forEach((e) => {
+          despesas += Number(e.value) || 0;
+          if (e.receiptImage) fotosCount++;
+        });
+      }
+    });
+
+    const dinheiroEspecie = Math.max(0, arrecadado - pix) - despesas;
+    const sobraLiquida = arrecadado - despesas;
+
+    return {
+      arrecadado,
+      despesas,
+      pix,
+      dinheiroEspecie,
+      sobraLiquida,
+      fotosCount,
+      diasCount,
+      viagensCount,
+    };
+  };
 
   // State para controlar visibilidade de senhas individuais na listagem
   const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
@@ -232,168 +295,357 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
         </div>
       </div>
 
-      {/* Cards de Motoristas Cadastrados */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-        {filteredDrivers.map((driver) => {
-          const linkedDays = getLinkedDaysCount(driver.id);
-          const isPasswordVisible = !!visiblePasswords[driver.id];
+      {/* Abas: Modo Logins vs Auditoria de Caixas & Fotos */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTabMode('logins')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            activeTabMode === 'logins'
+              ? 'bg-blue-700 text-white shadow-xs'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Cadastros & Logins</span>
+          <span className={`text-[11px] px-1.5 py-0.2 rounded-full font-bold ${
+            activeTabMode === 'logins' ? 'bg-blue-900 text-blue-200' : 'bg-slate-100 text-slate-700'
+          }`}>
+            {drivers.length}
+          </span>
+        </button>
 
-          return (
-            <div
-              key={driver.id}
-              className={`bg-white rounded-2xl border transition-all shadow-xs hover:shadow-md flex flex-col justify-between overflow-hidden ${
-                driver.status === 'inativo' ? 'border-slate-300 opacity-75' : 'border-slate-200'
-              }`}
-            >
-              <div className="p-5">
-                {/* Header Card */}
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center font-black text-sm shrink-0">
-                      {driver.name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div>
-                      <h3 className="font-extrabold text-slate-900 text-sm sm:text-base leading-snug">
-                        {driver.name}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span
-                          className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.2 rounded-full ${
-                            driver.status === 'ativo'
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              : 'bg-slate-100 text-slate-600 border border-slate-200'
-                          }`}
-                        >
+        <button
+          type="button"
+          onClick={() => setActiveTabMode('caixas')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+            activeTabMode === 'caixas'
+              ? 'bg-blue-700 text-white shadow-xs'
+              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Wallet className="w-4 h-4 text-emerald-500" />
+          <span>Auditoria de Caixas & Fotos</span>
+          <span className={`text-[11px] px-1.5 py-0.2 rounded-full font-bold ${
+            activeTabMode === 'caixas' ? 'bg-blue-900 text-blue-200' : 'bg-emerald-100 text-emerald-800'
+          }`}>
+            {drivers.length}
+          </span>
+        </button>
+      </div>
+
+      {/* MODO 1: CADASTROS E LOGINS (Cards dos motoristas com botão de caixa e edição) */}
+      {activeTabMode === 'logins' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+          {filteredDrivers.map((driver) => {
+            const linkedDays = getLinkedDaysCount(driver.id);
+            const isPasswordVisible = !!visiblePasswords[driver.id];
+            const stats = getDriverStats(driver);
+
+            return (
+              <div
+                key={driver.id}
+                className={`bg-white rounded-2xl border transition-all shadow-xs hover:shadow-md flex flex-col justify-between overflow-hidden ${
+                  driver.status === 'inativo' ? 'border-slate-300 opacity-75' : 'border-slate-200'
+                }`}
+              >
+                <div className="p-5">
+                  {/* Header Card */}
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center font-black text-sm shrink-0">
+                        {driver.name.substring(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="font-extrabold text-slate-900 text-sm sm:text-base leading-snug">
+                          {driver.name}
+                        </h3>
+                        <div className="flex items-center gap-2 mt-0.5">
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              driver.status === 'ativo' ? 'bg-emerald-500' : 'bg-slate-400'
+                            className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.2 rounded-full ${
+                              driver.status === 'ativo'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
                             }`}
-                          />
-                          {driver.status === 'ativo' ? 'Acesso Ativo' : 'Inativo'}
-                        </span>
-
-                        {driver.vehiclePlate && (
-                          <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.2 rounded border border-slate-200">
-                            🚗 {driver.vehiclePlate}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                driver.status === 'ativo' ? 'bg-emerald-500' : 'bg-slate-400'
+                              }`}
+                            />
+                            {driver.status === 'ativo' ? 'Acesso Ativo' : 'Inativo'}
                           </span>
+
+                          {driver.vehiclePlate && (
+                            <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.2 rounded border border-slate-200">
+                              🚗 {driver.vehiclePlate}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Box com Dados de Login e Senha para o Motorista */}
+                  <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-slate-500">
+                        <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+                        <span className="font-bold">Login:</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 select-all">
+                          {driver.username || 'Não cadastrado'}
+                        </span>
+                        {driver.username && (
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(driver.username, 'Login', `u-${driver.id}`)}
+                            className="p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
+                            title="Copiar nome de usuário"
+                          >
+                            {copiedKey === `u-${driver.id}` ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 text-slate-500">
+                        <Lock className="w-3.5 h-3.5 text-amber-600" />
+                        <span className="font-bold">Senha:</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                          {isPasswordVisible ? driver.password : '••••••••'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility(driver.id)}
+                          className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
+                          title={isPasswordVisible ? 'Ocultar senha' : 'Ver senha'}
+                        >
+                          {isPasswordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                        {driver.password && (
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(driver.password, 'Senha', `p-${driver.id}`)}
+                            className="p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
+                            title="Copiar senha de acesso"
+                          >
+                            {copiedKey === `p-${driver.id}` ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
                         )}
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Box com Dados de Login e Senha para o Motorista */}
-                <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-slate-500">
-                      <KeyRound className="w-3.5 h-3.5 text-blue-600" />
-                      <span className="font-bold">Login:</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200 select-all">
-                        {driver.username || 'Não cadastrado'}
+                  {/* Resumo do Caixa e Fotos na Semana Ativa */}
+                  <div className="mt-3 bg-blue-50/70 border border-blue-200/70 rounded-xl p-3 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between font-semibold text-slate-700">
+                      <span className="flex items-center gap-1 text-[11px] text-slate-600">
+                        <DollarSign className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Arrecadado nesta semana:</span>
                       </span>
-                      {driver.username && (
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(driver.username, 'Login', `u-${driver.id}`)}
-                          className="p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
-                          title="Copiar nome de usuário"
-                        >
-                          {copiedKey === `u-${driver.id}` ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      )}
+                      <span className="font-mono font-bold text-slate-900">
+                        {formatCurrency(stats.arrecadado)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="flex items-center gap-1 text-slate-500">
+                        <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Comprovantes com foto:</span>
+                      </span>
+                      <span className={`font-bold px-2 py-0.2 rounded-full text-[10px] ${
+                        stats.fotosCount > 0
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {stats.fotosCount} foto{stats.fotosCount !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-blue-200/60">
+                      <span className="text-slate-500">Saldo em Espécie:</span>
+                      <span className={`font-mono font-bold ${
+                        stats.dinheiroEspecie >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                      }`}>
+                        {formatCurrency(stats.dinheiroEspecie)}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5 text-slate-500">
-                      <Lock className="w-3.5 h-3.5 text-amber-600" />
-                      <span className="font-bold">Senha:</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                        {isPasswordVisible ? driver.password : '••••••••'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => togglePasswordVisibility(driver.id)}
-                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
-                        title={isPasswordVisible ? 'Ocultar senha' : 'Ver senha'}
-                      >
-                        {isPasswordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                      {driver.password && (
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(driver.password, 'Senha', `p-${driver.id}`)}
-                          className="p-1 text-slate-400 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors"
-                          title="Copiar senha de acesso"
-                        >
-                          {copiedKey === `p-${driver.id}` ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      )}
-                    </div>
+                  {/* Dias vinculados nesta semana */}
+                  <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Vinculado nesta semana:</span>
+                    </span>
+                    <span className={`font-bold ${linkedDays > 0 ? 'text-blue-700' : 'text-slate-400'}`}>
+                      {linkedDays} {linkedDays === 1 ? 'dia' : 'dias'}
+                    </span>
                   </div>
                 </div>
 
-                {/* Dias vinculados nesta semana */}
-                <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Vinculado nesta semana:</span>
-                  </span>
-                  <span className={`font-bold ${linkedDays > 0 ? 'text-blue-700' : 'text-slate-400'}`}>
-                    {linkedDays} {linkedDays === 1 ? 'dia' : 'dias'}
-                  </span>
+                {/* Card Footer com Ações */}
+                <div className="bg-slate-50/80 px-4 py-3 border-t border-slate-100 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAuditDriver(driver)}
+                    className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    title="Ver todo o caixa, viagens, despesas e fotos salvas por este motorista"
+                  >
+                    <Wallet className="w-4 h-4 text-emerald-100" />
+                    <span>Ver Caixa & Fotos do Motorista</span>
+                  </button>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAssignDriverToSheet(driver, true);
+                        setSuccessToast(`Motorista "${driver.name}" vinculado a todos os dias da semana!`);
+                        setTimeout(() => setSuccessToast(null), 3000);
+                      }}
+                      className="flex-1 py-1.5 px-2 bg-white hover:bg-blue-50 hover:text-blue-700 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-200 transition-colors cursor-pointer text-center"
+                      title="Atribuir este motorista a todos os 7 dias da semana ativa"
+                    >
+                      Vincular Semana Toda
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(driver)}
+                      className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                      title="Editar dados de login e senha"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(driver)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                      title="Excluir cadastro"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
+            );
+          })}
+        </div>
+      )}
 
-              {/* Card Footer com Ações */}
-              <div className="bg-slate-50/80 px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onAssignDriverToSheet(driver, true);
-                    setSuccessToast(`Motorista "${driver.name}" vinculado a todos os dias da semana!`);
-                    setTimeout(() => setSuccessToast(null), 3000);
-                  }}
-                  className="flex-1 py-1.5 px-2 bg-white hover:bg-blue-50 hover:text-blue-700 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-200 transition-colors cursor-pointer text-center"
-                  title="Atribuir este motorista a todos os 7 dias da semana ativa"
-                >
-                  Vincular Semana Toda
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleOpenEdit(driver)}
-                  className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                  title="Editar dados de login e senha"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDelete(driver)}
-                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                  title="Excluir cadastro"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+      {/* MODO 2: AUDITORIA DE CAIXAS & FOTOS CONSOLIDADA */}
+      {activeTabMode === 'caixas' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-sm sm:text-base flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-blue-700" />
+                  <span>Painel de Auditoria de Caixas & Prestação de Contas</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Acompanhe a arrecadação, dinheiro físico, despesas e todas as fotos de comprovantes enviadas pelos motoristas.
+                </p>
               </div>
             </div>
-          );
-        })}
-      </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                    <th className="py-3 px-4">MOTORISTA / PLACA</th>
+                    <th className="py-3 px-3 text-center">DIAS</th>
+                    <th className="py-3 px-3 text-right">ARRECADAÇÃO</th>
+                    <th className="py-3 px-3 text-right text-blue-700">PIX</th>
+                    <th className="py-3 px-3 text-right text-rose-700">DESPESAS</th>
+                    <th className="py-3 px-3 text-right font-black">ESPÉCIE (MÃOS)</th>
+                    <th className="py-3 px-3 text-center">FOTOS</th>
+                    <th className="py-3 px-4 text-center">AÇÕES</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {drivers.map((drv) => {
+                    const stats = getDriverStats(drv);
+                    return (
+                      <tr key={`audit-row-${drv.id}`} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-4 font-bold text-slate-900">
+                          <div className="flex items-center gap-2">
+                            <span className="w-7 h-7 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-black text-xs">
+                              {drv.name.substring(0, 2).toUpperCase()}
+                            </span>
+                            <div>
+                              <span className="block">{drv.name}</span>
+                              <span className="text-[11px] text-slate-400 font-mono">
+                                {drv.vehiclePlate || 'Sem placa cadastrada'}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center font-bold text-slate-700">
+                          {stats.diasCount}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
+                          {formatCurrency(stats.arrecadado)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-blue-700">
+                          {formatCurrency(stats.pix)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-rose-700">
+                          {formatCurrency(stats.despesas)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-black">
+                          <span className={`px-2 py-0.5 rounded ${
+                            stats.dinheiroEspecie >= 0
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : 'bg-rose-100 text-rose-900'
+                          }`}>
+                            {formatCurrency(stats.dinheiroEspecie)}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                            stats.fotosCount > 0
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            <Camera className="w-3 h-3" />
+                            <span>{stats.fotosCount}</span>
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAuditDriver(drv)}
+                            className="inline-flex items-center gap-1.5 bg-blue-700 hover:bg-blue-800 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                          >
+                            <Wallet className="w-3.5 h-3.5 text-blue-200" />
+                            <span>Ver Caixa Completo</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {filteredDrivers.length === 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
@@ -554,6 +806,18 @@ export const DriversManager: React.FC<DriversManagerProps> = ({
 
           </div>
         </div>
+      )}
+
+      {/* Modal Completo de Auditoria do Caixa e Fotos do Motorista */}
+      {selectedAuditDriver && (
+        <DriverCashAuditModal
+          isOpen={!!selectedAuditDriver}
+          onClose={() => setSelectedAuditDriver(null)}
+          driver={selectedAuditDriver}
+          currentSheet={activeSheet}
+          allSheets={allSheets && allSheets.length > 0 ? allSheets : [activeSheet]}
+          onOpenDayInEditor={onOpenDayInEditor}
+        />
       )}
 
     </div>

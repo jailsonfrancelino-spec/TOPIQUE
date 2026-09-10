@@ -731,11 +731,17 @@ export default function App() {
               <DriversManager
                 drivers={drivers}
                 activeSheet={activeSheet}
+                allSheets={sheets}
                 onAddDriver={handleAddDriver}
                 onUpdateDriver={handleUpdateDriver}
                 onDeleteDriver={handleDeleteDriver}
                 onAssignDriverToSheet={handleAssignDriverToSheet}
                 onNavigateToDailySheet={(driverId) => {
+                  setActiveTab('daily');
+                }}
+                onOpenDayInEditor={(sheetId, dayIndex) => {
+                  handleSelectSheet(sheetId);
+                  setSelectedDayIndex(dayIndex);
                   setActiveTab('daily');
                 }}
                 supabaseStatus={supabaseStatus}

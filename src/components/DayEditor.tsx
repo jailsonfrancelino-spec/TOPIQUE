@@ -380,16 +380,35 @@ export const DayEditor: React.FC<DayEditorProps> = ({
           </div>
         </div>
 
-        {/* Driver Operator Bar - Identificado automaticamente pelo login */}
+        {/* Driver Operator Bar - Identificado pelo login ou ajustado pelo Admin */}
         <div className="bg-slate-50/90 px-4 py-2.5 sm:px-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 text-xs font-bold shadow-2xs">
-              <UserCheck className="w-4 h-4 text-blue-600" />
-              <span>Motorista Logado:</span>
-              <span className="font-black text-blue-950">
-                {currentUser?.displayName || day.driverName || 'Jailson Francelino'}
+            {currentUser?.role === 'admin' ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 text-xs font-bold shadow-2xs">
+                <UserCheck className="w-4 h-4 text-blue-600" />
+                <span>Motorista do Dia:</span>
+                <select
+                  value={day.driverId || ''}
+                  onChange={(e) => handleSelectDayDriver(day.id, e.target.value)}
+                  className="bg-white border border-blue-300 rounded px-2 py-0.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                >
+                  <option value="">Nenhum / Selecionar motorista...</option>
+                  {drivers.map((drv) => (
+                    <option key={drv.id} value={drv.id}>
+                      {drv.name} {drv.vehiclePlate ? `(${drv.vehiclePlate})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200 text-xs font-bold shadow-2xs">
+                <UserCheck className="w-4 h-4 text-blue-600" />
+                <span>Motorista Logado:</span>
+                <span className="font-black text-blue-950">
+                  {currentUser?.displayName || day.driverName || 'Jailson Francelino'}
+                </span>
               </span>
-            </span>
+            )}
 
             {(day.vehiclePlate || currentUser?.role === 'driver') && (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white text-slate-800 border border-slate-200 font-bold text-[11px]">
@@ -401,9 +420,29 @@ export const DayEditor: React.FC<DayEditorProps> = ({
               </span>
             )}
 
-            <span className="text-[11px] text-slate-400 italic hidden sm:inline">
-              (Lançamentos registrados no login ativo)
-            </span>
+            {/* Contador de comprovantes com foto salvos no dia */}
+            {(() => {
+              const photosCount = day.expenses.filter((e) => !!e.receiptImage).length;
+              if (photosCount === 0) return null;
+              return (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-[11px]">
+                  <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{photosCount} foto{photosCount !== 1 ? 's' : ''} de comprovante salva{photosCount !== 1 ? 's' : ''}</span>
+                </span>
+              );
+            })()}
+
+            {currentUser?.role === 'admin' && onOpenDriversTab && (
+              <button
+                type="button"
+                onClick={onOpenDriversTab}
+                className="inline-flex items-center gap-1 text-[11px] bg-white hover:bg-blue-50 hover:text-blue-700 text-slate-700 font-bold px-2.5 py-1 rounded-lg border border-slate-200 transition-colors cursor-pointer shadow-2xs"
+                title="Acessar painel do Admin para auditar todo o caixa do motorista e ver todas as fotos salvas"
+              >
+                <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Auditar Caixas & Fotos</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
