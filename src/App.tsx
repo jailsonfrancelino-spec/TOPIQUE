@@ -80,9 +80,14 @@ export default function App() {
   });
   const [syncState, setSyncState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const hasUnsavedChangesRef = useRef<boolean>(false);
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
-  const saveDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isRemoteSyncRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
 
   // Sync active sheet
   const activeSheet = sheets.find((s) => s.id === activeId) || sheets[0];
@@ -206,6 +211,11 @@ export default function App() {
         // Subscribe to Realtime changes across any device or browser tab
         unsubscribeRealtime = subscribeToWeeklySheets(
           (remoteSheet) => {
+            // Se o usuário estiver editando a planilha ativa e possuir alterações locais não salvas,
+            // não sobrescreve os dados dele na tela para não perder o que foi digitado!
+            if (hasUnsavedChangesRef.current && remoteSheet.id === activeId) {
+              return;
+            }
             isRemoteSyncRef.current = true;
             setSheets((prev) => {
               const idx = prev.findIndex((s) => s.id === remoteSheet.id);
@@ -237,7 +247,7 @@ export default function App() {
             }
           },
           (newActivePointerId) => {
-            if (newActivePointerId) {
+            if (newActivePointerId && !hasUnsavedChangesRef.current) {
               setActiveId(newActivePointerId);
               setActiveSheetId(newActivePointerId);
             }
@@ -245,16 +255,19 @@ export default function App() {
         );
       }
 
-      // Sincronização periódica inteligente de fallback (a cada 10s e quando focar a tela)
+      // Sincronização periódica inteligente de fallback (apenas se NÃO houver alterações pendentes)
       const syncFromCloudSilently = async () => {
         if (!isMounted || isRemoteSyncRef.current) return;
+        // Nunca sobrescreve se houver alterações não salvas
+        if (hasUnsavedChangesRef.current) return;
+
         const activeEl = document.activeElement;
         if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
           return;
         }
         try {
           const cloudSheets = await fetchSheetsFromSupabase();
-          if (cloudSheets && cloudSheets.length > 0 && isMounted) {
+          if (cloudSheets && cloudSheets.length > 0 && isMounted && !hasUnsavedChangesRef.current) {
             isRemoteSyncRef.current = true;
             setSheets(cloudSheets);
             setSyncState('saved');
@@ -318,53 +331,45 @@ export default function App() {
     }
   }, [drivers]);
 
-  // 2. Salvamento AUTOMÁTICO no Banco de Dados Supabase em tempo real (Digitou, salvou!)
-  useEffect(() => {
-    if (!activeSheet || isRemoteSyncRef.current) return;
-
-    if (saveDebounceTimerRef.current) {
-      clearTimeout(saveDebounceTimerRef.current);
+  // 2. Salvamento MANUAL no Banco de Dados Supabase (o motorista/administrador salva quando desejar)
+  const handleSaveToSupabase = async (
+    sheetToSave?: WeeklySheet
+  ): Promise<{ success: boolean; error?: string }> => {
+    const target = sheetToSave || activeSheet;
+    if (!target) {
+      return { success: false, error: 'Nenhuma ficha selecionada para salvar.' };
     }
 
     setSyncState('saving');
+    // Salva cópia local no aparelho como garantia preventiva
+    saveAllSheets(sheets);
 
-    // Debounce rápido de 280ms: assim que o usuário digita qualquer número ou letra, já persiste no banco
-    saveDebounceTimerRef.current = setTimeout(async () => {
-      const ok = await saveSheetToSupabase(activeSheet);
+    try {
+      const result = await saveSheetToSupabase(target);
       const nowTime = new Date().toLocaleTimeString('pt-BR');
-      if (ok) {
+
+      if (result.success) {
+        setHasUnsavedChanges(false);
+        hasUnsavedChangesRef.current = false;
         setSyncState('saved');
         setLastSavedTime(nowTime);
         setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
+        return { success: true };
       } else {
-        // Salvo com sucesso no armazenamento local do banco
-        setSyncState('saved');
-        setLastSavedTime(nowTime);
+        setSyncState('error');
+        console.error('Falha ao salvar no Supabase:', result.error);
+        return { success: false, error: result.error || 'Erro ao persistir no Supabase.' };
       }
-    }, 280);
+    } catch (err: any) {
+      setSyncState('error');
+      console.error('Exceção ao salvar no Supabase:', err);
+      return { success: false, error: err?.message || 'Falha de conexão com o banco de dados.' };
+    }
+  };
 
-    return () => {
-      if (saveDebounceTimerRef.current) {
-        clearTimeout(saveDebounceTimerRef.current);
-      }
-    };
-  }, [activeSheet]);
-
-  // Força o salvamento imediato sem esperar o timer (ex: quando o usuário sai do campo input)
+  // Disparo manual de salvamento imediato
   const handleTriggerInstantSave = async () => {
-    if (!activeSheet) return;
-    if (saveDebounceTimerRef.current) {
-      clearTimeout(saveDebounceTimerRef.current);
-    }
-    setSyncState('saving');
-    saveAllSheets(sheets);
-    const ok = await saveSheetToSupabase(activeSheet);
-    const nowTime = new Date().toLocaleTimeString('pt-BR');
-    setSyncState('saved');
-    setLastSavedTime(nowTime);
-    if (ok) {
-      setSupabaseStatus((prev) => ({ ...prev, tableExists: true }));
-    }
+    await handleSaveToSupabase();
   };
 
   const handleSyncAllToCloud = async () => {
@@ -416,6 +421,9 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
     setSheets((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    setHasUnsavedChanges(true);
+    hasUnsavedChangesRef.current = true;
+    setSyncState('idle');
   };
 
   const handleUpdateDay = (dayId: string, updatedDay: DayRecord) => {
@@ -428,6 +436,9 @@ export default function App() {
     };
 
     setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
+    setHasUnsavedChanges(true);
+    hasUnsavedChangesRef.current = true;
+    setSyncState('idle');
   };
 
   const handleCopyExpensesFromPreviousDay = (currentDayIndex: number) => {
@@ -459,6 +470,9 @@ export default function App() {
     const updatedSheet = updateSheetDatesForWeek(activeSheet, mondayIso);
 
     setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
+    setHasUnsavedChanges(true);
+    hasUnsavedChangesRef.current = true;
+    setSyncState('idle');
   };
 
   const handleShiftWeek = (delta: number) => {
@@ -474,6 +488,9 @@ export default function App() {
     const updatedSheet = updateSheetDatesForWeek(activeSheet, mondayIso);
 
     setSheets((prev) => prev.map((s) => (s.id === updatedSheet.id ? updatedSheet : s)));
+    setHasUnsavedChanges(true);
+    hasUnsavedChangesRef.current = true;
+    setSyncState('idle');
   };
 
   const handleCreateNewWeek = (startDate: string, companyRoute: string) => {
@@ -742,6 +759,9 @@ export default function App() {
     });
 
     handleUpdateActiveSheet({ ...activeSheet, days: updatedDays });
+    setHasUnsavedChanges(true);
+    hasUnsavedChangesRef.current = true;
+    setSyncState('idle');
   };
 
   // 1. If not authenticated, ALWAYS start on Login Screen as requested
@@ -772,6 +792,8 @@ export default function App() {
           supabaseStatus={supabaseStatus}
           syncState={syncState}
           lastSavedTime={lastSavedTime}
+          hasUnsavedChanges={hasUnsavedChanges}
+          onSaveToSupabase={handleSaveToSupabase}
           onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
           onLogout={handleLogout}
           driversCount={drivers.length}
@@ -836,6 +858,8 @@ export default function App() {
                 onOpenDriversTab={() => setActiveTab('drivers')}
                 syncState={syncState}
                 lastSavedTime={lastSavedTime}
+                hasUnsavedChanges={hasUnsavedChanges}
+                onSaveToSupabase={handleSaveToSupabase}
                 onTriggerInstantSave={handleTriggerInstantSave}
                 onOpenSupabaseModal={() => setIsSupabaseModalOpen(true)}
               />

@@ -39,6 +39,8 @@ interface HeaderProps {
   supabaseStatus: SupabaseStatus;
   syncState: 'idle' | 'saving' | 'saved' | 'error';
   lastSavedTime: string | null;
+  hasUnsavedChanges?: boolean;
+  onSaveToSupabase?: () => void | Promise<any>;
   onOpenSupabaseModal: () => void;
   onLogout: () => void;
   driversCount?: number;
@@ -61,6 +63,8 @@ export const Header: React.FC<HeaderProps> = ({
   supabaseStatus,
   syncState,
   lastSavedTime,
+  hasUnsavedChanges = false,
+  onSaveToSupabase,
   onOpenSupabaseModal,
   onLogout,
   driversCount = 0,
@@ -95,35 +99,63 @@ export const Header: React.FC<HeaderProps> = ({
                   Fluxo de Caixa Operacional
                 </span>
                 
-                {/* Supabase Realtime Status Button */}
+                {/* Supabase Status Button */}
                 <button
                   onClick={onOpenSupabaseModal}
                   className={`text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1.5 font-bold transition-all cursor-pointer border shadow-2xs ${
                     syncState === 'saving'
                       ? 'bg-blue-100 text-blue-800 border-blue-300 animate-pulse'
+                      : hasUnsavedChanges
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
                       : supabaseStatus.tableExists
                       ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
-                      : 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
+                      : 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
                   }`}
-                  title="Conexão com banco de dados Supabase em tempo real. Clique para gerenciar."
+                  title="Conexão com banco de dados Supabase. Clique para gerenciar."
                 >
                   <Database className="w-3.5 h-3.5" />
                   <span>
                     {syncState === 'saving' ? (
-                      'Salvando no Supabase...'
+                      'Gravando no Supabase...'
+                    ) : hasUnsavedChanges ? (
+                      '⚠️ Alterações Pendentes'
                     ) : supabaseStatus.tableExists ? (
-                      'Supabase: Tempo Real Ativo'
+                      'Supabase Conectado'
                     ) : (
-                      'Supabase: Criar Tabela'
+                      'Supabase: Verificar'
                     )}
                   </span>
-                  {supabaseStatus.tableExists && (
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  {!hasUnsavedChanges && supabaseStatus.tableExists && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
                   )}
-                  {lastSavedTime && syncState === 'saved' && (
+                  {lastSavedTime && !hasUnsavedChanges && (
                     <span className="text-[10px] font-normal opacity-80">({lastSavedTime})</span>
                   )}
                 </button>
+
+                {/* Botão de Salvar Alterações no Supabase */}
+                {onSaveToSupabase && (
+                  <button
+                    type="button"
+                    onClick={() => onSaveToSupabase()}
+                    disabled={syncState === 'saving'}
+                    className={`text-xs px-3 py-1 rounded-full flex items-center gap-1.5 font-extrabold transition-all cursor-pointer shadow-xs ${
+                      hasUnsavedChanges
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-400 animate-pulse'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
+                    }`}
+                    title="Gravar viagens e despesas no Supabase agora"
+                  >
+                    <span className="text-xs">💾</span>
+                    <span>
+                      {syncState === 'saving'
+                        ? 'Gravando...'
+                        : hasUnsavedChanges
+                        ? 'Salvar Alterações'
+                        : 'Salvo no Banco'}
+                    </span>
+                  </button>
+                )}
               </div>
 
               {!isEditingHeader ? (

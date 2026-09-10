@@ -45,6 +45,8 @@ interface DayEditorProps {
   onOpenDriversTab?: () => void;
   syncState?: 'idle' | 'saving' | 'saved' | 'error';
   lastSavedTime?: string | null;
+  hasUnsavedChanges?: boolean;
+  onSaveToSupabase?: () => Promise<{ success: boolean; error?: string }>;
   onTriggerInstantSave?: () => void;
   onOpenSupabaseModal?: () => void;
 }
@@ -61,6 +63,8 @@ export const DayEditor: React.FC<DayEditorProps> = ({
   onOpenDriversTab,
   syncState = 'saved',
   lastSavedTime,
+  hasUnsavedChanges = false,
+  onSaveToSupabase,
   onTriggerInstantSave,
   onOpenSupabaseModal,
 }) => {
@@ -72,6 +76,7 @@ export const DayEditor: React.FC<DayEditorProps> = ({
   };
   const [viewAllDays, setViewAllDays] = useState<boolean>(false);
   const [copiedToast, setCopiedToast] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [printModalDay, setPrintModalDay] = useState<{ day: DayRecord; idx: number } | null>(null);
   
   // Estado para o modal de comprovante de despesa com foto/câmera
@@ -86,20 +91,30 @@ export const DayEditor: React.FC<DayEditorProps> = ({
 
   const handleManualSave = async () => {
     setIsSavingManual(true);
+    setSaveError(null);
     try {
-      if (onTriggerInstantSave) {
+      if (onSaveToSupabase) {
+        const res = await onSaveToSupabase();
+        if (res.success) {
+          setCopiedToast('✅ Viagens e despesas salvas com sucesso no banco de dados do Administrador!');
+          setSaveError(null);
+        } else {
+          setSaveError(res.error || 'Erro ao persistir no Supabase');
+          setCopiedToast(null);
+        }
+      } else if (onTriggerInstantSave) {
         await onTriggerInstantSave();
+        setCopiedToast('✅ Viagens e despesas salvas com sucesso no banco de dados do Administrador!');
+        setSaveError(null);
       }
-      setCopiedToast('✅ Viagens e despesas salvas com sucesso no banco de dados do Administrador!');
-    } catch {
-      setCopiedToast('Alterações salvas localmente no aparelho.');
+    } catch (err: any) {
+      setSaveError(err?.message || 'Falha de comunicação com o servidor');
+      setCopiedToast(null);
     } finally {
-      setTimeout(() => {
-        setIsSavingManual(false);
-      }, 400);
+      setIsSavingManual(false);
       setTimeout(() => {
         setCopiedToast(null);
-      }, 4000);
+      }, 5000);
     }
   };
 
@@ -892,11 +907,21 @@ export const DayEditor: React.FC<DayEditorProps> = ({
                 id={`btn-bottom-save-${day.id}`}
                 onClick={handleManualSave}
                 disabled={isSavingManual || syncState === 'saving'}
-                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-extrabold text-xs sm:text-sm px-4 py-3 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
+                className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-2 font-extrabold text-xs sm:text-sm px-5 py-3 rounded-xl shadow-md transition-all cursor-pointer min-h-[44px] ${
+                  hasUnsavedChanges
+                    ? 'bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white ring-2 ring-emerald-400 animate-pulse hover:animate-none'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
                 title="Garante que todas as viagens cadastradas fiquem salvas no banco de dados do Administrador Jailson"
               >
                 <Save className={`w-4 h-4 ${isSavingManual || syncState === 'saving' ? 'animate-spin' : ''}`} />
-                <span>{isSavingManual || syncState === 'saving' ? 'Salvando no Banco...' : '💾 Salvar Viagens no Banco'}</span>
+                <span>
+                  {isSavingManual || syncState === 'saving'
+                    ? 'Gravando no Supabase...'
+                    : hasUnsavedChanges
+                    ? '💾 SALVAR ALTERAÇÕES NO SUPABASE'
+                    : '💾 Salvar Viagens no Banco'}
+                </span>
               </button>
 
               <button
@@ -940,60 +965,108 @@ export const DayEditor: React.FC<DayEditorProps> = ({
         </div>
       )}
 
-      {/* Barra de Status de Salvamento Automático em Tempo Real */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs text-xs">
-        <div className="flex items-center gap-2.5">
-          {syncState === 'saving' ? (
-            <div className="flex items-center gap-2 text-blue-700 font-bold">
-              <RefreshCw className="w-4 h-4 text-blue-600 animate-spin" />
-              <span>Digitando... Salvando no banco de dados em tempo real...</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-emerald-900 font-bold flex-wrap">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-              </span>
-              <Database className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Salvamento Automático Ativo:</span>
-              <span className="font-semibold text-slate-700">
-                digitou qualquer viagem ou despesa, já salva instantaneamente no banco de dados.
-              </span>
-              {lastSavedTime && (
-                <span className="bg-emerald-100 text-emerald-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-emerald-200">
-                  Salvo às {lastSavedTime}
-                </span>
-              )}
-            </div>
-          )}
+      {/* Mensagem de Erro caso ocorra falha de conexão */}
+      {saveError && (
+        <div className="p-3.5 bg-rose-50 border-2 border-rose-300 rounded-2xl text-xs text-rose-900 flex items-start gap-3 shadow-xs">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <strong className="block font-bold text-rose-950 text-sm">Falha ao gravar no Supabase:</strong>
+            <p className="mt-0.5">{saveError}</p>
+            <p className="mt-1 text-slate-600 font-medium">
+              Não se preocupe: suas alterações estão guardadas localmente no aparelho. Verifique sua internet e clique no botão <strong>Salvar Novamente</strong>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleManualSave}
+            disabled={isSavingManual}
+            className="bg-rose-600 hover:bg-rose-700 text-white font-bold px-3 py-1.5 rounded-lg shrink-0 cursor-pointer text-xs"
+          >
+            Tentar Novamente
+          </button>
         </div>
+      )}
 
-        <div className="flex items-center gap-2">
-          {onTriggerInstantSave && (
+      {/* Barra de Controle de Salvamento Manual no Supabase */}
+      {hasUnsavedChanges ? (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-amber-50 border-2 border-amber-300 shadow-sm text-xs">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 bg-amber-200 text-amber-900 rounded-xl shrink-0 mt-0.5 sm:mt-0">
+              <AlertCircle className="w-5 h-5 text-amber-800" />
+            </div>
+            <div>
+              <div className="font-black text-amber-950 text-sm flex items-center gap-2 flex-wrap">
+                <span>⚠️ Você possui alterações não salvas</span>
+                <span className="text-[10px] font-extrabold uppercase bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full border border-amber-300">
+                  Pendente de Envio
+                </span>
+              </div>
+              <p className="text-amber-800 font-medium text-xs mt-0.5">
+                Suas viagens ou despesas editadas estão prontas. Clique no botão ao lado para gravar definitivamente no banco de dados do Administrador.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               id="instant-save-btn"
-              onClick={onTriggerInstantSave}
-              className="text-[11px] text-slate-700 hover:text-blue-700 font-bold inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition-colors cursor-pointer"
-              title="Garantir gravação imediata agora"
+              onClick={handleManualSave}
+              disabled={isSavingManual || syncState === 'saving'}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-extrabold text-xs sm:text-sm px-5 py-3 rounded-xl shadow-md transition-all cursor-pointer ring-2 ring-emerald-500/50 animate-pulse hover:animate-none"
+              title="Clique para salvar as viagens e despesas no Supabase"
             >
-              <Save className="w-3.5 h-3.5 text-blue-600" />
-              <span>Gravar Agora</span>
+              <Save className={`w-4 h-4 ${isSavingManual || syncState === 'saving' ? 'animate-spin' : ''}`} />
+              <span>
+                {isSavingManual || syncState === 'saving'
+                  ? 'Gravando no Supabase...'
+                  : '💾 SALVAR ALTERAÇÕES NO SUPABASE'}
+              </span>
             </button>
-          )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs text-xs">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+            <Database className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-extrabold text-slate-900">Banco de Dados Supabase:</span>
+            <span className="text-slate-600 font-medium">
+              Todas as viagens e despesas estão salvas no banco.
+            </span>
+            {lastSavedTime && (
+              <span className="bg-emerald-100 text-emerald-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-emerald-200">
+                Salvo às {lastSavedTime}
+              </span>
+            )}
+          </div>
 
-          {onOpenSupabaseModal && (
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onOpenSupabaseModal}
-              className="text-[11px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
-              title="Ver status e tabelas do banco de dados"
+              id="instant-save-btn"
+              onClick={handleManualSave}
+              disabled={isSavingManual || syncState === 'saving'}
+              className="text-[11px] text-slate-700 hover:text-emerald-700 font-bold inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50 transition-colors cursor-pointer"
+              title="Gravar novamente no banco de dados para confirmar"
             >
-              Status do Banco
+              <Save className={`w-3.5 h-3.5 text-emerald-600 ${isSavingManual || syncState === 'saving' ? 'animate-spin' : ''}`} />
+              <span>{isSavingManual || syncState === 'saving' ? 'Gravando...' : 'Gravar Novamente'}</span>
             </button>
-          )}
+
+            {onOpenSupabaseModal && (
+              <button
+                type="button"
+                onClick={onOpenSupabaseModal}
+                className="text-[11px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                title="Ver status e tabelas do banco de dados"
+              >
+                Status do Banco
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Day Selector Navigation Pills */}
       <div className="bg-white p-2 sm:p-3 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">

@@ -163,6 +163,8 @@ export function mapDriverToRow(driver: Driver): any {
 
 /**
  * Converte um WeeklySheet para o formato de inserção/atualização no Supabase.
+ * Envia o array de viagens e despesas (days) diretamente na coluna 'days'
+ * e dados essenciais da rota em 'data', evitando duplicação excessiva de tamanho de payload.
  */
 export function mapSheetToRow(sheet: WeeklySheet): any {
   return {
@@ -171,7 +173,14 @@ export function mapSheetToRow(sheet: WeeklySheet): any {
     start_date: sheet.startDate,
     end_date: sheet.endDate,
     days: sheet.days,
-    data: sheet,
+    data: {
+      id: sheet.id,
+      companyRoute: sheet.companyRoute,
+      startDate: sheet.startDate,
+      endDate: sheet.endDate,
+      vehiclePlate: sheet.vehiclePlate,
+      updatedAt: sheet.updatedAt || new Date().toISOString(),
+    },
     updated_at: new Date().toISOString(),
   };
 }
@@ -478,10 +487,16 @@ export async function fetchSheetsFromSupabase(): Promise<WeeklySheet[] | null> {
   }
 }
 
+export interface SupabaseSaveResult {
+  success: boolean;
+  error?: string;
+}
+
 /**
  * Salva ou atualiza uma planilha semanal no Supabase (Upsert).
+ * Retorna status de sucesso e mensagem de erro em caso de falha para feedback visual ao motorista.
  */
-export async function saveSheetToSupabase(sheet: WeeklySheet): Promise<boolean> {
+export async function saveSheetToSupabase(sheet: WeeklySheet): Promise<SupabaseSaveResult> {
   try {
     const payload = mapSheetToRow(sheet);
     let { error } = await supabase
@@ -503,14 +518,14 @@ export async function saveSheetToSupabase(sheet: WeeklySheet): Promise<boolean> 
     }
 
     if (error) {
-      console.warn('Aviso ao salvar no Supabase:', error.message);
-      return false;
+      console.error('Aviso ao salvar no Supabase:', error.message);
+      return { success: false, error: error.message || 'Erro ao persistir na tabela weekly_sheets' };
     }
 
-    return true;
-  } catch (err) {
-    console.warn('Falha na requisição para o Supabase (salvando localmente):', err);
-    return false;
+    return { success: true };
+  } catch (err: any) {
+    console.error('Falha na requisição para o Supabase (salvando localmente):', err);
+    return { success: false, error: err?.message || 'Falha de conexão com a internet ou servidor' };
   }
 }
 
