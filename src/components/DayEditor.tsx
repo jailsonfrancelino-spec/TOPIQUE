@@ -81,6 +81,28 @@ export const DayEditor: React.FC<DayEditorProps> = ({
     dayLabel: string;
   } | null>(null);
 
+  // Estado de salvamento manual explícito para dar certeza absoluta ao motorista
+  const [isSavingManual, setIsSavingManual] = useState<boolean>(false);
+
+  const handleManualSave = async () => {
+    setIsSavingManual(true);
+    try {
+      if (onTriggerInstantSave) {
+        await onTriggerInstantSave();
+      }
+      setCopiedToast('✅ Viagens e despesas salvas com sucesso no banco de dados do Administrador!');
+    } catch {
+      setCopiedToast('Alterações salvas localmente no aparelho.');
+    } finally {
+      setTimeout(() => {
+        setIsSavingManual(false);
+      }, 400);
+      setTimeout(() => {
+        setCopiedToast(null);
+      }, 4000);
+    }
+  };
+
   const currentDay = sheet.days[selectedDayIndex] || sheet.days[0];
 
   // Helper to update trip values and link to active driver
@@ -446,7 +468,20 @@ export const DayEditor: React.FC<DayEditorProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Indicador de Salvamento Automático em Tempo Real */}
+            {/* Botão de Salvamento Manual Explícito */}
+            <button
+              type="button"
+              id={`manual-save-btn-${day.id}`}
+              onClick={handleManualSave}
+              disabled={isSavingManual || syncState === 'saving'}
+              className="inline-flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold px-3 py-1.5 rounded-lg shadow-xs transition-all cursor-pointer disabled:opacity-75"
+              title="Salva imediatamente todas as viagens e despesas no banco de dados para o Administrador visualizar"
+            >
+              <Save className={`w-3.5 h-3.5 ${isSavingManual || syncState === 'saving' ? 'animate-spin' : ''}`} />
+              <span>{isSavingManual || syncState === 'saving' ? 'Salvando...' : 'Salvar no Banco'}</span>
+            </button>
+
+            {/* Indicador de Salvamento em Tempo Real */}
             <div 
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors shadow-2xs ${
                 syncState === 'saving'
@@ -853,11 +888,23 @@ export const DayEditor: React.FC<DayEditorProps> = ({
           <div className="bg-white p-3 sm:p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
             <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
               <button
+                type="button"
+                id={`btn-bottom-save-${day.id}`}
+                onClick={handleManualSave}
+                disabled={isSavingManual || syncState === 'saving'}
+                className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-extrabold text-xs sm:text-sm px-4 py-3 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
+                title="Garante que todas as viagens cadastradas fiquem salvas no banco de dados do Administrador Jailson"
+              >
+                <Save className={`w-4 h-4 ${isSavingManual || syncState === 'saving' ? 'animate-spin' : ''}`} />
+                <span>{isSavingManual || syncState === 'saving' ? 'Salvando no Banco...' : '💾 Salvar Viagens no Banco'}</span>
+              </button>
+
+              <button
                 onClick={() => setPrintModalDay({ day, idx: dayIdx })}
                 className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs sm:text-sm px-4 py-3 rounded-xl shadow-xs transition-all cursor-pointer min-h-[44px]"
               >
                 <Share2 className="w-4 h-4" />
-                <span>📲 Enviar Print do Caixa no WhatsApp</span>
+                <span>📲 Enviar WhatsApp</span>
               </button>
 
               <button

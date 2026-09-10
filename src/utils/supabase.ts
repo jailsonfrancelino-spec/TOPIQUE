@@ -232,6 +232,53 @@ export async function testSupabaseConnection(): Promise<SupabaseStatus> {
 }
 
 export const DRIVERS_BACKUP_ROW_ID = '__app_drivers_catalog_cloud__';
+export const ACTIVE_SHEET_POINTER_ROW_ID = '__app_active_sheet_pointer__';
+
+/**
+ * Busca qual é a planilha ativa oficial compartilhada entre Admin e Motoristas.
+ */
+export async function fetchActiveSheetPointerFromSupabase(): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from(TABLE_NAME)
+      .select('data')
+      .eq('id', ACTIVE_SHEET_POINTER_ROW_ID)
+      .maybeSingle();
+
+    if (!error && data?.data?.activeSheetId) {
+      return data.data.activeSheetId;
+    }
+    return null;
+  } catch (err) {
+    console.warn('Erro ao buscar ponteiro de planilha ativa:', err);
+    return null;
+  }
+}
+
+/**
+ * Define qual é a planilha ativa oficial no Supabase (todos os dispositivos sincronizam para ela).
+ */
+export async function saveActiveSheetPointerToSupabase(sheetId: string): Promise<boolean> {
+  try {
+    const payload = {
+      id: ACTIVE_SHEET_POINTER_ROW_ID,
+      company_route: '__SISTEMA_PONTEIRO_PLANILHA_ATIVA__',
+      start_date: '2020-01-01',
+      end_date: '2035-12-31',
+      days: [],
+      data: {
+        activeSheetId: sheetId,
+        updatedAt: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    };
+    await supabase.from(TABLE_NAME).upsert(payload, { onConflict: 'id' });
+    return true;
+  } catch (err) {
+    console.warn('Erro ao salvar ponteiro de planilha ativa no Supabase:', err);
+    return false;
+  }
+}
 
 /**
  * Carrega todos os motoristas cadastrados do Supabase.
@@ -404,14 +451,14 @@ export function subscribeToDrivers(
 }
 
 /**
- * Carrega todas as planilhas semanais do Supabase ordenadas pela data mais recente.
+ * Carrega todas as planilhas semanais do Supabase ordenadas pela data mais recente de atualização.
  */
 export async function fetchSheetsFromSupabase(): Promise<WeeklySheet[] | null> {
   try {
     const { data, error } = await supabase
       .from(TABLE_NAME)
       .select('*')
-      .order('start_date', { ascending: false });
+      .order('updated_at', { ascending: false });
 
     if (error) {
       console.warn('Supabase fetchSheets error:', error.message);
@@ -422,8 +469,8 @@ export async function fetchSheetsFromSupabase(): Promise<WeeklySheet[] | null> {
       return [];
     }
 
-    // Filtra para remover registros reservados do sistema (ex: catálogo de motoristas)
-    const validRows = data.filter((r) => r.id !== DRIVERS_BACKUP_ROW_ID && !r.id?.startsWith('__'));
+    // Filtra para remover registros reservados do sistema (ex: catálogo de motoristas, ponteiro de planilha ativa)
+    const validRows = data.filter((r) => r.id !== DRIVERS_BACKUP_ROW_ID && r.id !== ACTIVE_SHEET_POINTER_ROW_ID && !r.id?.startsWith('__'));
     return validRows.map(mapRowToSheet);
   } catch (err) {
     console.warn('Erro ao buscar planilhas do Supabase:', err);
@@ -497,7 +544,8 @@ export async function deleteSheetFromSupabase(sheetId: string): Promise<boolean>
 export function subscribeToWeeklySheets(
   onUpsert: (sheet: WeeklySheet) => void,
   onDelete: (sheetId: string) => void,
-  onDriversBackupUpdate?: (drivers: Driver[]) => void
+  onDriversBackupUpdate?: (drivers: Driver[]) => void,
+  onActiveSheetPointerUpdate?: (activeSheetId: string) => void
 ): () => void {
   let channel: RealtimeChannel | null = null;
 
@@ -518,6 +566,14 @@ export function subscribeToWeeklySheets(
         const newRow = payload.new as any;
         const oldRow = payload.old as any;
 
+        // Se for atualização no ponteiro de planilha ativa global
+        if (newRow && newRow.id === ACTIVE_SHEET_POINTER_ROW_ID) {
+          if (onActiveSheetPointerUpdate && newRow.data?.activeSheetId) {
+            onActiveSheetPointerUpdate(newRow.data.activeSheetId);
+          }
+          return;
+        }
+
         // Se for atualização no catálogo unificado de motoristas
         if (newRow && (newRow.id === DRIVERS_BACKUP_ROW_ID || newRow.id?.startsWith('__'))) {
           if (onDriversBackupUpdate && newRow.data?.drivers && Array.isArray(newRow.data.drivers)) {
@@ -525,7 +581,7 @@ export function subscribeToWeeklySheets(
           }
           return;
         }
-        if (oldRow && (oldRow.id === DRIVERS_BACKUP_ROW_ID || oldRow.id?.startsWith('__'))) {
+        if (oldRow && (oldRow.id === DRIVERS_BACKUP_ROW_ID || oldRow.id === ACTIVE_SHEET_POINTER_ROW_ID || oldRow.id?.startsWith('__'))) {
           return;
         }
 

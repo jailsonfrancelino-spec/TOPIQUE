@@ -34,6 +34,8 @@ import {
   deleteDriverFromSupabase,
   syncAllDriversToCloud,
   subscribeToDrivers,
+  fetchActiveSheetPointerFromSupabase,
+  saveActiveSheetPointerToSupabase,
   SupabaseStatus,
 } from './utils/supabase';
 import { Header } from './components/Header';
@@ -159,13 +161,26 @@ export default function App() {
         const cloudSheets = await fetchSheetsFromSupabase();
         if (!isMounted) return;
 
+        // Fetch official cloud active sheet pointer
+        const cloudActivePointer = await fetchActiveSheetPointerFromSupabase();
+        if (!isMounted) return;
+
         if (cloudSheets && cloudSheets.length > 0) {
           isRemoteSyncRef.current = true;
           setSheets(cloudSheets);
-          setActiveId((prevId) => {
-            if (cloudSheets.some((s) => s.id === prevId)) return prevId;
-            return cloudSheets[0].id;
-          });
+          
+          let targetActiveId = cloudSheets[0].id;
+          if (cloudActivePointer && cloudSheets.some((s) => s.id === cloudActivePointer)) {
+            targetActiveId = cloudActivePointer;
+          } else {
+            const stored = getActiveSheetId();
+            if (stored && cloudSheets.some((s) => s.id === stored)) {
+              targetActiveId = stored;
+            }
+          }
+
+          setActiveId(targetActiveId);
+          setActiveSheetId(targetActiveId);
           setSyncState('saved');
           setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
           setTimeout(() => {
@@ -177,6 +192,9 @@ export default function App() {
           if (currentLocal.length > 0) {
             for (const s of currentLocal) {
               await saveSheetToSupabase(s);
+            }
+            if (currentLocal[0]) {
+              await saveActiveSheetPointerToSupabase(currentLocal[0].id);
             }
             setSyncState('saved');
             setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
@@ -217,15 +235,61 @@ export default function App() {
               setDrivers(updatedDrivers);
               saveAllDrivers(updatedDrivers);
             }
+          },
+          (newActivePointerId) => {
+            if (newActivePointerId) {
+              setActiveId(newActivePointerId);
+              setActiveSheetId(newActivePointerId);
+            }
           }
         );
       }
+
+      // Sincronização periódica inteligente de fallback (a cada 10s e quando focar a tela)
+      const syncFromCloudSilently = async () => {
+        if (!isMounted || isRemoteSyncRef.current) return;
+        const activeEl = document.activeElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+          return;
+        }
+        try {
+          const cloudSheets = await fetchSheetsFromSupabase();
+          if (cloudSheets && cloudSheets.length > 0 && isMounted) {
+            isRemoteSyncRef.current = true;
+            setSheets(cloudSheets);
+            setSyncState('saved');
+            setLastSavedTime(new Date().toLocaleTimeString('pt-BR'));
+            setTimeout(() => {
+              isRemoteSyncRef.current = false;
+            }, 300);
+          }
+        } catch {
+          // Ignora falhas temporárias de rede
+        }
+      };
+
+      const pollInterval = setInterval(syncFromCloudSilently, 10000);
+      const handleWindowFocus = () => {
+        syncFromCloudSilently();
+      };
+      window.addEventListener('focus', handleWindowFocus);
+      document.addEventListener('visibilitychange', handleWindowFocus);
+
+      return () => {
+        clearInterval(pollInterval);
+        window.removeEventListener('focus', handleWindowFocus);
+        document.removeEventListener('visibilitychange', handleWindowFocus);
+      };
     };
 
-    initSupabase();
+    let cleanupListeners: (() => void) | undefined;
+    initSupabase().then((cleanup) => {
+      cleanupListeners = cleanup;
+    });
 
     return () => {
       isMounted = false;
+      if (cleanupListeners) cleanupListeners();
       if (unsubscribeRealtime) {
         unsubscribeRealtime();
       }
@@ -332,6 +396,10 @@ export default function App() {
 
   const handleSelectSheet = (id: string) => {
     setActiveId(id);
+    setActiveSheetId(id);
+    if (currentUser?.role === 'admin') {
+      saveActiveSheetPointerToSupabase(id);
+    }
   };
 
   const handleUpdateActiveSheet = (updatedSheet: WeeklySheet) => {
@@ -412,8 +480,10 @@ export default function App() {
     const newSheet = createNewWeeklySheet(startDate, undefined, companyRoute);
     setSheets((prev) => [newSheet, ...prev]);
     setActiveId(newSheet.id);
+    setActiveSheetId(newSheet.id);
     setActiveTab('daily');
     saveSheetToSupabase(newSheet);
+    saveActiveSheetPointerToSupabase(newSheet.id);
   };
 
   const handleDeleteSheet = (sheetId: string) => {
@@ -423,11 +493,15 @@ export default function App() {
       if (remaining.length === 0) {
         const fresh = createNewWeeklySheet();
         setActiveId(fresh.id);
+        setActiveSheetId(fresh.id);
         saveSheetToSupabase(fresh);
+        saveActiveSheetPointerToSupabase(fresh.id);
         return [fresh];
       }
       if (activeId === sheetId) {
         setActiveId(remaining[0].id);
+        setActiveSheetId(remaining[0].id);
+        saveActiveSheetPointerToSupabase(remaining[0].id);
       }
       return remaining;
     });

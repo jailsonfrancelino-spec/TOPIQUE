@@ -4,7 +4,7 @@
  * mantendo textos e números de comprovantes e cupons fiscais perfeitamente legíveis.
  */
 
-export async function compressReceiptImage(file: File, maxDimension = 1280, quality = 0.78): Promise<string> {
+export async function compressReceiptImage(file: File, maxDimension = 1000, quality = 0.68): Promise<string> {
   return new Promise((resolve, reject) => {
     // Validação básica do tipo de arquivo
     if (!file.type.startsWith('image/')) {
