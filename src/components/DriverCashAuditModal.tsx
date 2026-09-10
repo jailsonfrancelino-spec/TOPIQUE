@@ -21,10 +21,13 @@ import {
   ChevronRight,
   User,
   ShieldCheck,
-  Edit3
+  Edit3,
+  ExternalLink,
+  Layers
 } from 'lucide-react';
 import { Driver, WeeklySheet, DayRecord, ExpenseRecord, TripRecord } from '../types';
 import { calculateTripSubtotal, formatCurrency, formatDatePtBR } from '../utils/calculations';
+import { DayCashTicketCard } from './DayCashTicketCard';
 
 interface DriverCashAuditModalProps {
   isOpen: boolean;
@@ -164,6 +167,139 @@ export const DriverCashAuditModal: React.FC<DriverCashAuditModalProps> = ({
 
     return photos;
   }, [effectiveDays, activeSheet]);
+
+  // Estado para filtrar dia na aba de Lançamentos Dia a Dia (null = todos)
+  const [selectedDayFilterIndex, setSelectedDayFilterIndex] = useState<number | null>(null);
+
+  // Resumo oficial linha a linha por dia da semana (Segunda a Domingo)
+  const dailySummary = useMemo(() => {
+    // Verifica se este motorista tem dias explicitamente vinculados nesta planilha
+    const hasExplicitDays = activeSheet.days.some((d) => 
+      d.driverId === driver.id || 
+      (d.driverName && d.driverName.toLowerCase().includes(driver.name.toLowerCase())) ||
+      d.trips.some((t) => t.driverId === driver.id)
+    );
+
+    return activeSheet.days.map((day, dayIndex) => {
+      // Se há dias vinculados explicitamente a este motorista, verifica se este dia é dele
+      const isDayOfDriver = 
+        day.driverId === driver.id ||
+        (day.driverName && day.driverName.toLowerCase().includes(driver.name.toLowerCase())) ||
+        day.trips.some((t) => t.driverId === driver.id);
+
+      // Se não há vínculo explícito nenhum na semana, audita todos os dias para o Admin não ver tudo zerado
+      const shouldInclude = hasExplicitDays ? isDayOfDriver : true;
+
+      let valorIda = 0;
+      let valorVolta = 0;
+      let valorEncom = 0;
+      let valorPix = 0;
+      let tripsCount = 0;
+
+      if (shouldInclude) {
+        day.trips.forEach((trip) => {
+          // Se a viagem específica for de outro motorista diferente, não soma
+          if (hasExplicitDays && trip.driverId && trip.driverId !== driver.id) {
+            return;
+          }
+          const ida = Number(trip.ida) || 0;
+          const volta = Number(trip.volta) || 0;
+          const encom = Number(trip.encom) || 0;
+          const pix = Number(trip.pix) || 0;
+          valorIda += ida;
+          valorVolta += volta;
+          valorEncom += encom;
+          valorPix += pix;
+          if (ida + volta + encom > 0) tripsCount++;
+        });
+      }
+
+      let totalDespesa = 0;
+      const dayPhotos: PhotoItem[] = [];
+
+      if (shouldInclude) {
+        day.expenses.forEach((exp) => {
+          const val = Number(exp.value) || 0;
+          totalDespesa += val;
+          if (exp.receiptImage) {
+            dayPhotos.push({
+              sheetId: activeSheet.id,
+              sheetRoute: activeSheet.companyRoute,
+              dayId: day.id,
+              dayIndex,
+              dayLabel: day.dayLabel,
+              date: day.date,
+              expenseId: exp.id,
+              expenseLabel: exp.label,
+              expenseCategory: exp.category,
+              expenseValue: val,
+              receiptImage: exp.receiptImage,
+              receiptName: exp.receiptName,
+            });
+          }
+        });
+      }
+
+      const totalArrecadado = valorIda + valorVolta + valorEncom;
+      // Saldo final físico em dinheiro do dia: (Arrecadação - Pix) - Despesas
+      const valorFinalDinheiro = (totalArrecadado - valorPix) - totalDespesa;
+      const hasMovement = tripsCount > 0 || totalDespesa > 0;
+
+      return {
+        dayIndex,
+        day,
+        dayLabel: day.dayLabel.split('—')[0].trim(),
+        fullDayLabel: day.dayLabel,
+        date: day.date,
+        driverName: day.driverName || driver.name,
+        vehiclePlate: day.vehiclePlate || driver.vehiclePlate,
+        valorIda,
+        valorVolta,
+        valorEncom,
+        valorPix,
+        totalArrecadado,
+        totalDespesa,
+        valorFinalDinheiro,
+        photos: dayPhotos,
+        tripsCount,
+        hasMovement,
+      };
+    });
+  }, [activeSheet, driver]);
+
+  // Totais consolidados da tabela do resumo (Segunda a Domingo)
+  const weeklyDailyTotals = useMemo(() => {
+    let totalIda = 0;
+    let totalVolta = 0;
+    let totalEncom = 0;
+    let totalPix = 0;
+    let totalArrecadado = 0;
+    let totalDespesa = 0;
+    let totalValorFinalDinheiro = 0;
+    let totalFotos = 0;
+
+    dailySummary.forEach((row) => {
+      totalIda += row.valorIda;
+      totalVolta += row.valorVolta;
+      totalEncom += row.valorEncom;
+      totalPix += row.valorPix;
+      totalArrecadado += row.totalArrecadado;
+      totalDespesa += row.totalDespesa;
+      totalValorFinalDinheiro += row.valorFinalDinheiro;
+      totalFotos += row.photos.length;
+    });
+
+    return {
+      totalIda,
+      totalVolta,
+      totalEncom,
+      totalPix,
+      totalArrecadado,
+      totalDespesa,
+      totalValorFinalDinheiro,
+      totalFotos,
+    };
+  }, [dailySummary]);
 
   if (!isOpen) return null;
 
@@ -386,7 +522,173 @@ export const DriverCashAuditModal: React.FC<DriverCashAuditModalProps> = ({
           {activeSubTab === 'caixa' && (
             <div className="space-y-6 animate-in fade-in duration-150">
               
-              {/* Card de Prestação de Contas */}
+              {/* TABELA DE FÁCIL ENTENDIMENTO: VALORES FINAIS DIA A DIA (SEGUNDA A DOMINGO) */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm sm:text-base font-black tracking-tight text-white uppercase flex items-center gap-2">
+                        <span>Resumo do Caixa por Dia — Segunda a Domingo</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-300">
+                        Valores finais calculados por dia com total geral da semana para {driver.name}
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2.5 py-1 rounded-lg font-bold self-start sm:self-auto">
+                    Sequência Semanal Oficial
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 uppercase tracking-wider text-[11px]">
+                        <th className="py-3 px-4 text-left">Dia da Semana</th>
+                        <th className="py-3 px-3 text-right">Valor Ida</th>
+                        <th className="py-3 px-3 text-right">Valor Volta</th>
+                        <th className="py-3 px-3 text-right text-blue-700 bg-blue-50/50">Recebido PIX</th>
+                        <th className="py-3 px-3 text-right text-rose-700">Total Despesa</th>
+                        <th className="py-3 px-4 text-right text-emerald-900 font-black bg-emerald-50/60">Valor Final em Dinheiro</th>
+                        <th className="py-3 px-3 text-center w-32">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {dailySummary.map((row) => {
+                        const isProfitable = row.valorFinalDinheiro >= 0;
+                        return (
+                          <tr
+                            key={row.dayIndex}
+                            className={`hover:bg-blue-50/40 transition-colors ${row.hasMovement ? 'bg-white' : 'bg-slate-50/40 opacity-75'}`}
+                          >
+                            {/* Dia da Semana */}
+                            <td className="py-3 px-4 font-bold text-slate-900">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-black text-slate-900">
+                                  {row.dayLabel}
+                                </span>
+                                <span className="text-[11px] font-mono font-medium text-slate-400">
+                                  ({formatDatePtBR(row.date)})
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Valor Ida */}
+                            <td className="py-3 px-3 text-right font-mono font-medium text-slate-700">
+                              {row.valorIda > 0 ? formatCurrency(row.valorIda) : '-'}
+                            </td>
+
+                            {/* Valor Volta */}
+                            <td className="py-3 px-3 text-right font-mono font-medium text-slate-700">
+                              {row.valorVolta > 0 ? formatCurrency(row.valorVolta) : '-'}
+                            </td>
+
+                            {/* Recebido PIX */}
+                            <td className="py-3 px-3 text-right font-mono font-bold text-blue-700 bg-blue-50/30">
+                              {row.valorPix > 0 ? formatCurrency(row.valorPix) : '-'}
+                            </td>
+
+                            {/* Total Despesa */}
+                            <td className="py-3 px-3 text-right font-mono text-rose-700">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {row.photos.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenZoom(row.photos[0])}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
+                                    title="Ver foto do comprovante deste dia"
+                                  >
+                                    <Camera className="w-3 h-3 text-emerald-700" />
+                                    <span>{row.photos.length} foto{row.photos.length !== 1 ? 's' : ''}</span>
+                                  </button>
+                                )}
+                                <span className="font-bold">
+                                  {row.totalDespesa > 0 ? formatCurrency(row.totalDespesa) : '-'}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Valor Final em Dinheiro */}
+                            <td className="py-3 px-4 text-right font-mono font-black text-sm bg-emerald-50/40">
+                              <span className={`px-2.5 py-1 rounded-md inline-block font-mono ${
+                                isProfitable 
+                                  ? 'bg-emerald-100 text-emerald-950 border border-emerald-300' 
+                                  : 'bg-rose-100 text-rose-950 border border-rose-300'
+                              }`}>
+                                {formatCurrency(row.valorFinalDinheiro)}
+                              </span>
+                            </td>
+
+                            {/* Ação rápida para ver o cupom/imagem na aba de Lançamentos */}
+                            <td className="py-3 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDayFilterIndex(row.dayIndex);
+                                  setActiveSubTab('dias');
+                                }}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-white bg-blue-50 hover:bg-blue-600 border border-blue-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                                title="Ver comprovante no formato de fechamento de caixa deste dia"
+                              >
+                                <Eye className="w-3 h-3" />
+                                <span>Ver Fechamento</span>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-900 text-white font-black border-t-2 border-slate-700">
+                        <td className="py-3.5 px-4 text-xs uppercase tracking-wider text-emerald-300">
+                          VALOR FINAL (TOTAIS DA SEMANA)
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono text-slate-200">
+                          {formatCurrency(weeklyDailyTotals.totalIda)}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono text-slate-200">
+                          {formatCurrency(weeklyDailyTotals.totalVolta)}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono text-blue-300 bg-blue-950/60">
+                          {formatCurrency(weeklyDailyTotals.totalPix)}
+                        </td>
+                        <td className="py-3.5 px-3 text-right font-mono text-rose-300">
+                          <div className="flex items-center justify-end gap-1">
+                            {weeklyDailyTotals.totalFotos > 0 && (
+                              <span className="text-[10px] text-emerald-300 bg-emerald-950/80 px-1.5 py-0.2 rounded border border-emerald-800">
+                                📷 {weeklyDailyTotals.totalFotos}
+                              </span>
+                            )}
+                            <span>{formatCurrency(weeklyDailyTotals.totalDespesa)}</span>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono text-base font-black text-emerald-300 bg-emerald-950/90 border-l border-r border-emerald-700">
+                          <span className="text-xs font-normal text-emerald-400 mr-1 block sm:inline">Total em mãos:</span>
+                          <span className="text-lg font-black text-emerald-300">{formatCurrency(weeklyDailyTotals.totalValorFinalDinheiro)}</span>
+                        </td>
+                        <td className="py-3.5 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDayFilterIndex(null);
+                              setActiveSubTab('dias');
+                            }}
+                            className="text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-500 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer shadow-xs whitespace-nowrap"
+                          >
+                            Ver Todos
+                          </button>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+
+              {/* Card de Prestação de Contas Resumido */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
@@ -617,163 +919,84 @@ export const DriverCashAuditModal: React.FC<DriverCashAuditModalProps> = ({
             </div>
           )}
 
-          {/* ABA 3: LANÇAMENTOS DETALHADOS DIA A DIA */}
+          {/* ABA 3: LANÇAMENTOS DETALHADOS DIA A DIA — IDÊNTICO À IMAGEM DE FECHAMENTO DE CAIXA */}
           {activeSubTab === 'dias' && (
             <div className="space-y-4 animate-in fade-in duration-150">
-              {effectiveDays.map(({ day, idx }) => {
-                const daySubtotal = day.trips.reduce((acc, t) => acc + calculateTripSubtotal(t), 0);
-                const dayPix = day.trips.reduce((acc, t) => acc + (Number(t.pix) || 0), 0);
-                const dayExpenses = day.expenses.reduce((acc, e) => acc + (Number(e.value) || 0), 0);
-                const dayEspecie = Math.max(0, daySubtotal - dayPix) - dayExpenses;
-                const hasReceipts = day.expenses.some((e) => Boolean(e.receiptImage));
+              
+              {/* Barra Superior de Filtro de Dias da Semana (Segunda a Domingo) */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1 px-2 shrink-0">
+                    <Calendar className="w-3.5 h-3.5 text-blue-700" />
+                    <span>Visualizar Dia:</span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDayFilterIndex(null)}
+                    className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                      selectedDayFilterIndex === null
+                        ? 'bg-blue-700 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    Todos os Dias
+                  </button>
+
+                  {dailySummary.map((row) => (
+                    <button
+                      key={row.dayIndex}
+                      type="button"
+                      onClick={() => setSelectedDayFilterIndex(row.dayIndex)}
+                      className={`text-xs px-2.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                        selectedDayFilterIndex === row.dayIndex
+                          ? 'bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-500'
+                          : row.hasMovement
+                          ? 'bg-emerald-50 text-emerald-900 border border-emerald-200 hover:bg-emerald-100'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                      title={`${row.dayLabel} (${formatDatePtBR(row.date)})`}
+                    >
+                      <span>{row.dayLabel.split('-')[0]}</span>
+                      {row.photos.length > 0 && (
+                        <span className="text-[10px]">📷</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 text-xs text-slate-500 font-medium self-end md:self-auto shrink-0">
+                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>Layout idêntico ao comprovante de fechamento de caixa</span>
+                </div>
+              </div>
+
+              {/* LISTA DE TICKETS OFICIAIS NO FORMATO DA IMAGEM DE FECHAMENTO */}
+              {(() => {
+                const daysToRender = selectedDayFilterIndex !== null
+                  ? dailySummary.filter((r) => r.dayIndex === selectedDayFilterIndex)
+                  : dailySummary.filter((r) => r.hasMovement || effectiveDays.some(ed => ed.idx === r.dayIndex));
+
+                const finalRenderList = daysToRender.length > 0 ? daysToRender : dailySummary;
 
                 return (
-                  <div
-                    key={day.id}
-                    className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden"
-                  >
-                    {/* Header do Dia */}
-                    <div className="bg-slate-900 text-white px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold bg-blue-600 text-white px-2.5 py-0.5 rounded text-[11px]">
-                          {day.dayLabel.split('—')[0]}
-                        </span>
-                        <span className="text-slate-300 font-mono">
-                          {formatDatePtBR(day.date)}
-                        </span>
-                        {day.vehiclePlate && (
-                          <span className="text-[10px] font-mono bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
-                            🚗 {day.vehiclePlate}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-slate-400">
-                          Arrecadado: <strong className="text-white font-mono">{formatCurrency(daySubtotal)}</strong>
-                        </span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-blue-300">
-                          PIX: <strong className="font-mono text-blue-200">{formatCurrency(dayPix)}</strong>
-                        </span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-rose-300">
-                          Despesas: <strong className="font-mono text-rose-200">{formatCurrency(dayExpenses)}</strong>
-                        </span>
-                        <span className="text-slate-400">•</span>
-                        <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
-                          dayEspecie >= 0 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
-                        }`}>
-                          Espécie: {formatCurrency(dayEspecie)}
-                        </span>
-
-                        {onOpenDayInEditor && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onOpenDayInEditor(activeSheet.id, idx);
-                              onClose();
-                            }}
-                            className="inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-500 text-white font-bold px-2.5 py-1 rounded text-[11px] transition-colors cursor-pointer ml-1"
-                            title="Abrir este dia para editar diretamente na ficha"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                            <span>Editar Ficha</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Grid com Viagens e Despesas deste dia */}
-                    <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
-                      
-                      {/* Viagens cadastradas */}
-                      <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-50/50">
-                        <div className="bg-slate-100 px-3 py-1.5 font-bold text-slate-800 border-b border-slate-200 flex items-center justify-between">
-                          <span>Viagens ({day.trips.length})</span>
-                          <span className="text-[11px] text-slate-500">Ida / Volta / Encom. / Pix / Subtotal</span>
-                        </div>
-                        <div className="divide-y divide-slate-200">
-                          {day.trips.map((trip) => {
-                            const sub = calculateTripSubtotal(trip);
-                            return (
-                              <div key={trip.id} className="p-2.5 flex items-center justify-between hover:bg-white">
-                                <span className="font-bold text-slate-800">{trip.tripName}</span>
-                                <div className="flex items-center gap-2 font-mono">
-                                  <span className="text-slate-600" title="Ida">Ida: {formatCurrency(trip.ida)}</span>
-                                  <span className="text-slate-600" title="Volta">Volta: {formatCurrency(trip.volta)}</span>
-                                  {trip.encom > 0 && <span className="text-slate-600" title="Encomendas">Enc: {formatCurrency(trip.encom)}</span>}
-                                  {trip.pix > 0 && <span className="text-blue-700 font-bold" title="Pix">Pix: {formatCurrency(trip.pix)}</span>}
-                                  <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
-                                    {formatCurrency(sub)}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Despesas e Comprovantes deste dia */}
-                      <div className="border border-slate-200 rounded-lg overflow-hidden bg-slate-50/50">
-                        <div className="bg-slate-100 px-3 py-1.5 font-bold text-slate-800 border-b border-slate-200 flex items-center justify-between">
-                          <span>Despesas & Comprovantes</span>
-                          <span className="text-[11px] text-slate-500">Foto anexada</span>
-                        </div>
-                        <div className="divide-y divide-slate-200">
-                          {day.expenses.map((exp) => {
-                            const hasPic = Boolean(exp.receiptImage);
-                            return (
-                              <div key={exp.id} className="p-2.5 flex items-center justify-between hover:bg-white gap-2">
-                                <div className="flex items-center gap-2 truncate">
-                                  <Receipt className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                                  <span className="font-semibold text-slate-800 truncate">{exp.label}</span>
-                                </div>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {hasPic && exp.receiptImage ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenZoom({
-                                        sheetId: activeSheet.id,
-                                        sheetRoute: activeSheet.companyRoute,
-                                        dayId: day.id,
-                                        dayIndex: idx,
-                                        dayLabel: day.dayLabel,
-                                        date: day.date,
-                                        expenseId: exp.id,
-                                        expenseLabel: exp.label,
-                                        expenseCategory: exp.category,
-                                        expenseValue: exp.value,
-                                        receiptImage: exp.receiptImage!,
-                                        receiptName: exp.receiptName,
-                                      })}
-                                      className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded hover:bg-emerald-100 transition-colors cursor-pointer"
-                                      title="Clique para ver a foto anexada"
-                                    >
-                                      <Camera className="w-3 h-3 text-emerald-600" />
-                                      <span>Ver Foto</span>
-                                    </button>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-400 italic">
-                                      Sem foto
-                                    </span>
-                                  )}
-
-                                  <span className="font-mono font-bold text-rose-700 min-w-16 text-right">
-                                    {formatCurrency(exp.value)}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                    </div>
+                  <div className="space-y-6">
+                    {finalRenderList.map((row) => (
+                      <DayCashTicketCard
+                        key={row.day.id || row.dayIndex}
+                        day={row.day}
+                        dayIndex={row.dayIndex}
+                        sheet={activeSheet}
+                        driver={driver}
+                        onOpenPhotoZoom={handleOpenZoom}
+                        onOpenDayInEditor={onOpenDayInEditor}
+                        onCloseModal={onClose}
+                      />
+                    ))}
                   </div>
                 );
-              })}
+              })()}
+
             </div>
           )}
 
